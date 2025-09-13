@@ -1,0 +1,19 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug Corsair Project (lldb)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/main", // 디버깅할 프로그램을 main으로 고정
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "lldb",
+            "targetArchitecture": "x86_64",
+            "preLaunchTask": "Build main for Debugging" // F5 누르면 항상 위 tasks.json의 빌드를 먼저 실행
+        }
+    ]
+}
