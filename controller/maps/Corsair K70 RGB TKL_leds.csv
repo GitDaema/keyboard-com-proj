@@ -1,0 +1,98 @@
+index,name_raw
+0,Key: Media Stop
+1,Key: Media Previous
+2,Key: Media Play/Pause
+3,Key: Media Next
+4,Logo L
+5,Logo R
+6,Profile
+7,Light
+8,Lock
+9,Key: Media Mute
+10,Key: Escape
+11,Key: F1
+12,Key: F2
+13,Key: F3
+14,Key: F4
+15,Key: F5
+16,Key: F6
+17,Key: F7
+18,Key: F8
+19,Key: F9
+20,Key: F10
+21,Key: F11
+22,Key: F12
+23,Key: Print Screen
+24,Key: Scroll Lock
+25,Key: Pause/Break
+26,Key: `
+27,Key: 1
+28,Key: 2
+29,Key: 3
+30,Key: 4
+31,Key: 5
+32,Key: 6
+33,Key: 7
+34,Key: 8
+35,Key: 9
+36,Key: 0
+37,Key: -
+38,Key: =
+39,Key: Backspace
+40,Key: Insert
+41,Key: Home
+42,Key: Page Up
+43,Key: Tab
+44,Key: Q
+45,Key: W
+46,Key: E
+47,Key: R
+48,Key: T
+49,Key: Y
+50,Key: U
+51,Key: I
+52,Key: O
+53,Key: P
+54,Key: [
+55,Key: ]
+56,Key: \ (ANSI)
+57,Key: Delete
+58,Key: End
+59,Key: Page Down
+60,Key: Caps Lock
+61,Key: A
+62,Key: S
+63,Key: D
+64,Key: F
+65,Key: G
+66,Key: H
+67,Key: J
+68,Key: K
+69,Key: L
+70,Key: ;
+71,Key: '
+72,Key: Enter
+73,Key: Left Shift
+74,Key: Z
+75,Key: X
+76,Key: C
+77,Key: V
+78,Key: B
+79,Key: N
+80,Key: M
+81,"Key: ,"
+82,Key: .
+83,Key: /
+84,Key: Right Shift
+85,Key: Up Arrow
+86,Key: Left Control
+87,Key: Left Windows
+88,Key: Left Alt
+89,Key: Space
+90,Key: Right Alt
+91,Key: Right Fn
+92,Key: Menu
+93,Key: Right Control
+94,Key: Left Arrow
+95,Key: Down Arrow
+96,Key: Right Arrow

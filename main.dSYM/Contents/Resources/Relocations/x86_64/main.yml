@@ -1,8 +1,0 @@
----
-triple:          'x86_64-apple-darwin'
-binary-path:     '/Users/user/dev/keyboard-com-proj/main'
-relocations:
-  - { offset: 0x26, size: 0x8, addend: 0x0, symName: __Z24read_and_print_key_colori12CorsairLedId, symObjAddr: 0x0, symBinAddr: 0x100000650, symSize: 0x80 }
-  - { offset: 0x1A50, size: 0x8, addend: 0x0, symName: __Z24read_and_print_key_colori12CorsairLedId, symObjAddr: 0x0, symBinAddr: 0x100000650, symSize: 0x80 }
-  - { offset: 0x1AB0, size: 0x8, addend: 0x0, symName: _main, symObjAddr: 0x80, symBinAddr: 0x1000006D0, symSize: 0x214 }
-...

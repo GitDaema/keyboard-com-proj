@@ -1,31 +1,19 @@
 {
-    "version": "2.0.0",
-    "tasks": [
-        {
-            "label": "Build main for Debugging",
-            "type": "shell",
-            "command": "/usr/bin/clang++",
-            "args": [
-                "-std=gnu++14",
-                "-g",
-                "-target",
-                "x86_64-apple-macos11",
-                "-Wl,-rpath,@executable_path/CUESDK",
-                "${file}",
-                "-o",
-                "${fileDirname}/${fileBasenameNoExtension}",
-                "-F",
-                "${workspaceFolder}/CUESDK",
-                "-framework",
-                "CUESDK"
-            ],
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            },
-            "problemMatcher": [
-                "$gcc"
-            ]
-        }
-    ]
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Run Demo (bash)",
+      "type": "shell",
+      "command": "bash",
+      "args": ["-lc", "./scripts/run_demo_windows.sh"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": []
+    }
+  ]
 }

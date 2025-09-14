@@ -1,0 +1,75 @@
+# ------------------------
+# Python
+# ------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pdb
+*.egg-info/
+*.egg
+*.log
+
+# Virtual environment
+.venv/
+venv/
+env/
+ENV/
+pip-wheel-metadata/
+wheels/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# ------------------------
+# OS / IDE
+# ------------------------
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# VSCode
+.vscode/*
+!.vscode/tasks.json      # 단축키 실행용 tasks.json은 저장
+!.vscode/launch.json     # 필요하다면 허용
+!.vscode/extensions.json # 권장 확장 추천용
+
+# Visual Studio (혹시 C/C++ 같이 쓰는 경우)
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# ------------------------
+# Build / Binary
+# ------------------------
+bin/*
+!bin/windows/OpenRGB.exe   # 네가 직접 넣은 실행 파일은 허용
+build/
+dist/
+*.dll
+*.exe
+*.so
+*.dylib
+*.obj
+*.o
+*.a
+*.lib
+
+# ------------------------
+# Temporary / Others
+# ------------------------
+*.tmp
+*.swp
+*.bak
+*.old
+*.out
+*.pid
+*.lock

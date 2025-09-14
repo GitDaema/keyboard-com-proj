@@ -1,0 +1,393 @@
+{
+  "keyboard": "Corsair K70 RGB TKL",
+  "leds": [
+    {
+      "index": 0,
+      "name_raw": "Key: Media Stop"
+    },
+    {
+      "index": 1,
+      "name_raw": "Key: Media Previous"
+    },
+    {
+      "index": 2,
+      "name_raw": "Key: Media Play/Pause"
+    },
+    {
+      "index": 3,
+      "name_raw": "Key: Media Next"
+    },
+    {
+      "index": 4,
+      "name_raw": "Logo L"
+    },
+    {
+      "index": 5,
+      "name_raw": "Logo R"
+    },
+    {
+      "index": 6,
+      "name_raw": "Profile"
+    },
+    {
+      "index": 7,
+      "name_raw": "Light"
+    },
+    {
+      "index": 8,
+      "name_raw": "Lock"
+    },
+    {
+      "index": 9,
+      "name_raw": "Key: Media Mute"
+    },
+    {
+      "index": 10,
+      "name_raw": "Key: Escape"
+    },
+    {
+      "index": 11,
+      "name_raw": "Key: F1"
+    },
+    {
+      "index": 12,
+      "name_raw": "Key: F2"
+    },
+    {
+      "index": 13,
+      "name_raw": "Key: F3"
+    },
+    {
+      "index": 14,
+      "name_raw": "Key: F4"
+    },
+    {
+      "index": 15,
+      "name_raw": "Key: F5"
+    },
+    {
+      "index": 16,
+      "name_raw": "Key: F6"
+    },
+    {
+      "index": 17,
+      "name_raw": "Key: F7"
+    },
+    {
+      "index": 18,
+      "name_raw": "Key: F8"
+    },
+    {
+      "index": 19,
+      "name_raw": "Key: F9"
+    },
+    {
+      "index": 20,
+      "name_raw": "Key: F10"
+    },
+    {
+      "index": 21,
+      "name_raw": "Key: F11"
+    },
+    {
+      "index": 22,
+      "name_raw": "Key: F12"
+    },
+    {
+      "index": 23,
+      "name_raw": "Key: Print Screen"
+    },
+    {
+      "index": 24,
+      "name_raw": "Key: Scroll Lock"
+    },
+    {
+      "index": 25,
+      "name_raw": "Key: Pause/Break"
+    },
+    {
+      "index": 26,
+      "name_raw": "Key: `"
+    },
+    {
+      "index": 27,
+      "name_raw": "Key: 1"
+    },
+    {
+      "index": 28,
+      "name_raw": "Key: 2"
+    },
+    {
+      "index": 29,
+      "name_raw": "Key: 3"
+    },
+    {
+      "index": 30,
+      "name_raw": "Key: 4"
+    },
+    {
+      "index": 31,
+      "name_raw": "Key: 5"
+    },
+    {
+      "index": 32,
+      "name_raw": "Key: 6"
+    },
+    {
+      "index": 33,
+      "name_raw": "Key: 7"
+    },
+    {
+      "index": 34,
+      "name_raw": "Key: 8"
+    },
+    {
+      "index": 35,
+      "name_raw": "Key: 9"
+    },
+    {
+      "index": 36,
+      "name_raw": "Key: 0"
+    },
+    {
+      "index": 37,
+      "name_raw": "Key: -"
+    },
+    {
+      "index": 38,
+      "name_raw": "Key: ="
+    },
+    {
+      "index": 39,
+      "name_raw": "Key: Backspace"
+    },
+    {
+      "index": 40,
+      "name_raw": "Key: Insert"
+    },
+    {
+      "index": 41,
+      "name_raw": "Key: Home"
+    },
+    {
+      "index": 42,
+      "name_raw": "Key: Page Up"
+    },
+    {
+      "index": 43,
+      "name_raw": "Key: Tab"
+    },
+    {
+      "index": 44,
+      "name_raw": "Key: Q"
+    },
+    {
+      "index": 45,
+      "name_raw": "Key: W"
+    },
+    {
+      "index": 46,
+      "name_raw": "Key: E"
+    },
+    {
+      "index": 47,
+      "name_raw": "Key: R"
+    },
+    {
+      "index": 48,
+      "name_raw": "Key: T"
+    },
+    {
+      "index": 49,
+      "name_raw": "Key: Y"
+    },
+    {
+      "index": 50,
+      "name_raw": "Key: U"
+    },
+    {
+      "index": 51,
+      "name_raw": "Key: I"
+    },
+    {
+      "index": 52,
+      "name_raw": "Key: O"
+    },
+    {
+      "index": 53,
+      "name_raw": "Key: P"
+    },
+    {
+      "index": 54,
+      "name_raw": "Key: ["
+    },
+    {
+      "index": 55,
+      "name_raw": "Key: ]"
+    },
+    {
+      "index": 56,
+      "name_raw": "Key: \\ (ANSI)"
+    },
+    {
+      "index": 57,
+      "name_raw": "Key: Delete"
+    },
+    {
+      "index": 58,
+      "name_raw": "Key: End"
+    },
+    {
+      "index": 59,
+      "name_raw": "Key: Page Down"
+    },
+    {
+      "index": 60,
+      "name_raw": "Key: Caps Lock"
+    },
+    {
+      "index": 61,
+      "name_raw": "Key: A"
+    },
+    {
+      "index": 62,
+      "name_raw": "Key: S"
+    },
+    {
+      "index": 63,
+      "name_raw": "Key: D"
+    },
+    {
+      "index": 64,
+      "name_raw": "Key: F"
+    },
+    {
+      "index": 65,
+      "name_raw": "Key: G"
+    },
+    {
+      "index": 66,
+      "name_raw": "Key: H"
+    },
+    {
+      "index": 67,
+      "name_raw": "Key: J"
+    },
+    {
+      "index": 68,
+      "name_raw": "Key: K"
+    },
+    {
+      "index": 69,
+      "name_raw": "Key: L"
+    },
+    {
+      "index": 70,
+      "name_raw": "Key: ;"
+    },
+    {
+      "index": 71,
+      "name_raw": "Key: '"
+    },
+    {
+      "index": 72,
+      "name_raw": "Key: Enter"
+    },
+    {
+      "index": 73,
+      "name_raw": "Key: Left Shift"
+    },
+    {
+      "index": 74,
+      "name_raw": "Key: Z"
+    },
+    {
+      "index": 75,
+      "name_raw": "Key: X"
+    },
+    {
+      "index": 76,
+      "name_raw": "Key: C"
+    },
+    {
+      "index": 77,
+      "name_raw": "Key: V"
+    },
+    {
+      "index": 78,
+      "name_raw": "Key: B"
+    },
+    {
+      "index": 79,
+      "name_raw": "Key: N"
+    },
+    {
+      "index": 80,
+      "name_raw": "Key: M"
+    },
+    {
+      "index": 81,
+      "name_raw": "Key: ,"
+    },
+    {
+      "index": 82,
+      "name_raw": "Key: ."
+    },
+    {
+      "index": 83,
+      "name_raw": "Key: /"
+    },
+    {
+      "index": 84,
+      "name_raw": "Key: Right Shift"
+    },
+    {
+      "index": 85,
+      "name_raw": "Key: Up Arrow"
+    },
+    {
+      "index": 86,
+      "name_raw": "Key: Left Control"
+    },
+    {
+      "index": 87,
+      "name_raw": "Key: Left Windows"
+    },
+    {
+      "index": 88,
+      "name_raw": "Key: Left Alt"
+    },
+    {
+      "index": 89,
+      "name_raw": "Key: Space"
+    },
+    {
+      "index": 90,
+      "name_raw": "Key: Right Alt"
+    },
+    {
+      "index": 91,
+      "name_raw": "Key: Right Fn"
+    },
+    {
+      "index": 92,
+      "name_raw": "Key: Menu"
+    },
+    {
+      "index": 93,
+      "name_raw": "Key: Right Control"
+    },
+    {
+      "index": 94,
+      "name_raw": "Key: Left Arrow"
+    },
+    {
+      "index": 95,
+      "name_raw": "Key: Down Arrow"
+    },
+    {
+      "index": 96,
+      "name_raw": "Key: Right Arrow"
+    }
+  ]
+}
