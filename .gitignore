@@ -51,7 +51,7 @@ $RECYCLE.BIN/
 # Build / Binary
 # ------------------------
 bin/*
-!bin/windows/OpenRGB.exe   # 네가 직접 넣은 실행 파일은 허용
+!bin/windows/**
 build/
 dist/
 *.dll
