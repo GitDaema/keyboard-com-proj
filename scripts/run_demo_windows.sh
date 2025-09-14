@@ -92,27 +92,40 @@ fi
 #    - Git Bash 경로 → Windows 경로 변환
 #    - 콘솔 붙지 않도록 Start-Process 사용
 # --------------------------------------------------------------------
+# --- 공통: 리눅스→윈도우 경로 변환 함수 (WSL/MinGW 모두 지원) ---
+to_win_path() {
+  local p="$1"
+  # 1) WSL이면 wslpath 사용
+  if command -v wslpath >/dev/null 2>&1; then
+    # -w: Windows-style path (C:\... 또는 \\wsl$\...)
+    wslpath -w "$p"
+    return
+  fi
+  # 2) Git Bash/MinGW/Cygwin이면 cygpath 사용
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$p"
+    return
+  fi
+  # 3) 둘 다 없으면 대략적 sed 변환(최후의 수단)
+  printf '%s' "$p" | sed -E 's#^/([a-zA-Z])/#\U\1:/#; s#/#\\#g'
+}
+
+# --- OpenRGB 실행 (WSL/MinGW 공용) ---
 OPENRGB_EXE="bin/windows/OpenRGB.exe"
 if [ -f "$OPENRGB_EXE" ]; then
   abs_exe="$(pwd)/$OPENRGB_EXE"
-
-  to_win_path() {
-    if command -v cygpath >/dev/null 2>&1; then
-      cygpath -w "$1"
-    else
-      printf '%s' "$1" | sed -E 's#^/([a-zA-Z])/#\U\1:/#; s#/#\\#g'
-    fi
-  }
-
   win_exe="$(to_win_path "$abs_exe")"
+
+  # 작업 디렉토리도 윈도우 경로로 변환 (DLL 탐색, 설정파일 상대경로에 유리)
   win_workdir="$(to_win_path "$(pwd)/bin/windows")"
+
   echo "[INFO] OpenRGB exe (Windows path) = $win_exe"
   echo "[INFO] OpenRGB workdir            = $win_workdir"
 
   powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command \
     "Start-Process -FilePath '$win_exe' -ArgumentList '--server','--startminimized' -WorkingDirectory '$win_workdir' -WindowStyle Minimized"
 
-  sleep 0.6
+  sleep 0.8
 else
   echo "[WARN] $OPENRGB_EXE 파일이 없어요. 건너뜀."
 fi
@@ -122,14 +135,33 @@ fi
 # --------------------------------------------------------------------
 echo "[INFO] wait OpenRGB: 127.0.0.1:6742 (최대 12초)"
 
-TMPPY="$(mktemp "${TMPDIR:-/tmp}/wait_openrgb_XXXXXX.py")"
-cat >"$TMPPY" <<'PY'
-import socket, time, sys
-host, port, timeout = "127.0.0.1", 6742, 12
+is_windows_python=false
+case "${PY_DESC,,}" in
+  *".exe"*|*"py -3"*|*"py"*)
+    is_windows_python=true
+    ;;
+esac
+
+if [ "$is_windows_python" = true ]; then
+  # PowerShell로 대기(WSL-윈도우 경로 이슈 회피)
+  powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command \
+  "\$i=0; while(\$i -lt 40) { if ((Test-NetConnection -ComputerName 127.0.0.1 -Port 6742 -WarningAction SilentlyContinue).TcpTestSucceeded) { Write-Output '[OK ] OpenRGB server detected.'; exit 0 }; Start-Sleep -Milliseconds 300; \$i++ }; Write-Output '[ERR] port wait failed'; exit 1"
+else
+  # 리눅스/WSL python으로 대기
+  TMPPY="$(mktemp "${TMPDIR:-/tmp}/wait_openrgb_XXXXXX.py")"
+  cat >"$TMPPY" <<'PY'
+import socket
+import time
+import sys
+
+host = "127.0.0.1"
+port = 6742
+timeout = 12
 start = time.time()
+
 while True:
     try:
-        with socket.create_connection((host, port), 0.5):
+        with socket.create_connection((host, port), timeout=0.5):
             print("[OK ] OpenRGB server detected.")
             sys.exit(0)
     except OSError:
@@ -138,8 +170,10 @@ while True:
             sys.exit(1)
         time.sleep(0.3)
 PY
-"${PY_BIN[@]}" "$TMPPY"
-rm -f "$TMPPY"
+
+  "${PY_BIN[@]}" "$TMPPY"
+  rm -f "$TMPPY"
+fi
 
 # --------------------------------------------------------------------
 # 4) 컨트롤러 실행 (항상 우리가 해상도한 파이썬으로)
