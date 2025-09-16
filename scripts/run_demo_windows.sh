@@ -3,7 +3,11 @@ set -euo pipefail
 
 echo "=== run_demo_windows.sh: START ==="
 
-# 0) 루트로 이동
+# -u 안전을 위한 초기값
+PY_DESC=""
+PY_BIN=()
+
+# 0) 프로젝트 루트로 이동
 cd "$(dirname "$0")/.."
 echo "[INFO] cwd = $(pwd)"
 echo "[INFO] SHELL = ${SHELL:-unknown}"
@@ -17,7 +21,7 @@ echo "[INFO] SHELL = ${SHELL:-unknown}"
 resolve_python() {
   local candidates=()
 
-  # venv 쪽 먼저
+  # venv 먼저
   if [ -x ".venv/Scripts/python.exe" ]; then
     candidates+=(".venv/Scripts/python.exe")
   fi
@@ -33,9 +37,8 @@ resolve_python() {
     candidates+=("python3")
   fi
   if command -v py >/dev/null 2>&1; then
-    # py -3가 되면 두 단어라 직접 지정 어려움 → wrapper로 처리
-    candidates+=("py3")  # 별도 케이스로 취급
-    candidates+=("py")   # 백업
+    candidates+=("py3")  # py -3
+    candidates+=("py")   # py
   fi
 
   for c in "${candidates[@]}"; do
@@ -70,7 +73,7 @@ resolve_python() {
 if ! resolve_python; then
   echo "[ERROR] 실행 가능한 Python 인터프리터를 찾지 못했습니다."
   echo "        - .venv 생성/설치:  python -m venv .venv"
-  echo "        - 패키지 설치:      <venv>/bin/pip or <venv>/Scripts/pip install -r requirements.txt"
+  echo "        - 패키지 설치:      <venv>/bin/pip 또는 <venv>/Scripts/pip install -r requirements.txt"
   echo "        - 또는 시스템 PATH에 python/python3/py를 추가하세요."
   exit 1
 fi
@@ -78,7 +81,7 @@ fi
 echo "[INFO] PYTHON = ${PY_DESC}"
 "${PY_BIN[@]}" --version || { echo "[ERROR] python 실행 불가"; exit 1; }
 
-# (선택) venv 활성화를 시도하되 실패해도 계속 진행 (우린 PY_BIN으로 실행 가능)
+# (선택) venv 활성화 시도(우리는 PY_BIN으로 실행하므로 실패해도 계속)
 if [ -f ".venv/Scripts/activate" ]; then
   # shellcheck disable=SC1091
   source ".venv/Scripts/activate" || true
@@ -88,77 +91,89 @@ elif [ -f ".venv/bin/activate" ]; then
 fi
 
 # --------------------------------------------------------------------
-# 2) OpenRGB 서버 실행 (Windows 전용, PowerShell 사용)
-#    - Git Bash 경로 → Windows 경로 변환
-#    - 콘솔 붙지 않도록 Start-Process 사용
+# 2) OpenRGB 서버 실행(Windows 전용)
+#    - 이미 서버(6742)가 떠 있으면 재기동하지 않음
+#    - 우리가 띄운 경우에만 PID를 기록해 종료 시 정리
 # --------------------------------------------------------------------
-# --- 공통: 리눅스→윈도우 경로 변환 함수 (WSL/MinGW 모두 지원) ---
 to_win_path() {
   local p="$1"
-  # 1) WSL이면 wslpath 사용
   if command -v wslpath >/dev/null 2>&1; then
-    # -w: Windows-style path (C:\... 또는 \\wsl$\...)
-    wslpath -w "$p"
-    return
+    wslpath -w "$p"; return
   fi
-  # 2) Git Bash/MinGW/Cygwin이면 cygpath 사용
   if command -v cygpath >/dev/null 2>&1; then
-    cygpath -w "$p"
-    return
+    cygpath -w "$p"; return
   fi
-  # 3) 둘 다 없으면 대략적 sed 변환(최후의 수단)
   printf '%s' "$p" | sed -E 's#^/([a-zA-Z])/#\U\1:/#; s#/#\\#g'
 }
 
-# --- OpenRGB 실행 (WSL/MinGW 공용) ---
+echo "[INFO] check OpenRGB server (pre-start)"
+SERVER_UP=false
+if command -v powershell.exe >/dev/null 2>&1; then
+  if powershell.exe -NoLogo -NoProfile -Command \
+    "(Test-NetConnection -ComputerName 127.0.0.1 -Port 6742 -WarningAction SilentlyContinue).TcpTestSucceeded" \
+    | tr -d '\r' | grep -qi 'True'; then
+    SERVER_UP=true
+  fi
+else
+  # bash에서 TCP 오픈 체크(일부 환경에서 미지원일 수 있음)
+  if (echo > /dev/tcp/127.0.0.1/6742) >/dev/null 2>&1; then
+    SERVER_UP=true
+  fi
+fi
+
+STARTED_OPENRGB=0
+OPENRGB_PID_FILE=".openrgb_server.pid"
+
 OPENRGB_EXE="bin/windows/OpenRGB.exe"
-if [ -f "$OPENRGB_EXE" ]; then
+if [ "$SERVER_UP" = false ] && [ -f "$OPENRGB_EXE" ]; then
   abs_exe="$(pwd)/$OPENRGB_EXE"
   win_exe="$(to_win_path "$abs_exe")"
-
-  # 작업 디렉토리도 윈도우 경로로 변환 (DLL 탐색, 설정파일 상대경로에 유리)
   win_workdir="$(to_win_path "$(pwd)/bin/windows")"
 
   echo "[INFO] OpenRGB exe (Windows path) = $win_exe"
   echo "[INFO] OpenRGB workdir            = $win_workdir"
 
-  powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command \
-    "Start-Process -FilePath '$win_exe' -ArgumentList '--server','--startminimized' -WorkingDirectory '$win_workdir' -WindowStyle Minimized"
-
-  sleep 0.8
+  # PassThru로 PID 확보
+  OPENRGB_PID=$(
+    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command \
+      "\$p = Start-Process -FilePath '$win_exe' -ArgumentList '--server','--startminimized' -WorkingDirectory '$win_workdir' -WindowStyle Minimized -PassThru; \$p.Id" \
+      | tr -d '\r'
+  )
+  if [ -n "${OPENRGB_PID:-}" ]; then
+    echo "$OPENRGB_PID" > "$OPENRGB_PID_FILE"
+    STARTED_OPENRGB=1
+    echo "[INFO] OpenRGB started (pid=$OPENRGB_PID)"
+  else
+    echo "[WARN] OpenRGB PID를 얻지 못했습니다(이미 실행 중일 수 있음)."
+  fi
 else
-  echo "[WARN] $OPENRGB_EXE 파일이 없어요. 건너뜀."
+  if [ "$SERVER_UP" = true ]; then
+    echo "[INFO] OpenRGB server already running; skip starting."
+  else
+    echo "[WARN] $OPENRGB_EXE 없음; OpenRGB는 수동 실행 또는 기존 서버 사용."
+  fi
 fi
 
 # --------------------------------------------------------------------
-# 3) 포트 대기 (여기독을 파일로 만들어 어떤 파이썬이든 안전 실행)
+# 3) 포트 대기(최대 12초)
+#    - Windows 파이썬/py를 쓰는 경우 PowerShell로 대기(경로 이슈 회피)
 # --------------------------------------------------------------------
 echo "[INFO] wait OpenRGB: 127.0.0.1:6742 (최대 12초)"
 
 is_windows_python=false
 case "${PY_DESC,,}" in
-  *".exe"*|*"py -3"*|*"py"*)
-    is_windows_python=true
-    ;;
+  *".exe"*|*"py -3"*|*"py"*) is_windows_python=true ;;
 esac
 
 if [ "$is_windows_python" = true ]; then
-  # PowerShell로 대기(WSL-윈도우 경로 이슈 회피)
   powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command \
-  "\$i=0; while(\$i -lt 40) { if ((Test-NetConnection -ComputerName 127.0.0.1 -Port 6742 -WarningAction SilentlyContinue).TcpTestSucceeded) { Write-Output '[OK ] OpenRGB server detected.'; exit 0 }; Start-Sleep -Milliseconds 300; \$i++ }; Write-Output '[ERR] port wait failed'; exit 1"
+    "\$i=0; while(\$i -lt 40) { if ((Test-NetConnection -ComputerName 127.0.0.1 -Port 6742 -WarningAction SilentlyContinue).TcpTestSucceeded) { Write-Output '[OK ] OpenRGB server detected.'; exit 0 }; Start-Sleep -Milliseconds 300; \$i++ }; Write-Output '[ERR] port wait failed'; exit 1"
 else
-  # 리눅스/WSL python으로 대기
   TMPPY="$(mktemp "${TMPDIR:-/tmp}/wait_openrgb_XXXXXX.py")"
   cat >"$TMPPY" <<'PY'
-import socket
-import time
-import sys
-
-host = "127.0.0.1"
-port = 6742
-timeout = 12
+import socket, time, sys
+host, port, timeout = "127.0.0.1", 6742, 12
 start = time.time()
-
 while True:
     try:
         with socket.create_connection((host, port), timeout=0.5):
@@ -170,13 +185,29 @@ while True:
             sys.exit(1)
         time.sleep(0.3)
 PY
-
   "${PY_BIN[@]}" "$TMPPY"
   rm -f "$TMPPY"
 fi
 
 # --------------------------------------------------------------------
-# 4) 컨트롤러 실행 (항상 우리가 해상도한 파이썬으로)
+# 4) 컨트롤러 실행(종료코드 캡처 → 우리가 띄운 OpenRGB만 정리)
 # --------------------------------------------------------------------
-echo "[INFO] run: python controller/main.py"
-exec "${PY_BIN[@]}" controller/main.py
+echo "[INFO] run: python main.py"
+set +e
+"${PY_BIN[@]}" src/main.py
+PY_EXIT=$?
+set -e
+echo "[INFO] controller exit code = ${PY_EXIT}"
+
+# 우리가 띄웠다면 그 인스턴스만 종료
+if [ "${STARTED_OPENRGB}" = "1" ] && [ -f "$OPENRGB_PID_FILE" ]; then
+  PID_TO_KILL="$(cat "$OPENRGB_PID_FILE" || true)"
+  if [ -n "${PID_TO_KILL:-}" ]; then
+    echo "[INFO] stopping OpenRGB we started (pid=$PID_TO_KILL)"
+    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command \
+      "Try { Stop-Process -Id $PID_TO_KILL -Force -ErrorAction Stop } Catch { }"
+  fi
+  rm -f "$OPENRGB_PID_FILE"
+fi
+
+exit "${PY_EXIT}"

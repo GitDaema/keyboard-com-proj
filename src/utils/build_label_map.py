@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 LED 이름(JSON) -> 라벨(label) 매핑 생성기
-- 입력: controller/maps/*_leds.json   (export_led_map.py 결과)
-- 출력: controller/maps/label_map.json
+- 입력: src/maps/*_leds.json   (export_led_map.py 결과)
+- 출력: src/maps/label_map.json
 
 동작:
 1) 이름 정규화(norm) 후, ALIASES에 정의된 별칭들을 우선 매칭
@@ -21,8 +21,8 @@ LED 이름(JSON) -> 라벨(label) 매핑 생성기
 
 import os, json, re
 from collections import defaultdict
+from config import MAPS_DIR
 
-MAPS_DIR = os.path.join(os.path.dirname(__file__), "maps")
 OUT_JSON = os.path.join(MAPS_DIR, "label_map.json")
 
 # ---------- 유틸 ----------

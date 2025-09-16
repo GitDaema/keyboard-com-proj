@@ -9,7 +9,7 @@ JSON(…_leds.json)을 직접 읽어 라벨→인덱스 매핑을 즉석에서 �
     from keyboard_map import RGBLabelController
 
     client = OpenRGBClient(address="127.0.0.1", port=6742, name="K70Demo")
-    km = RGBLabelController(client, json_path="controller/maps/Corsair K70 RGB TKL_leds.json")
+    km = RGBLabelController(client, json_path="src/maps/Corsair K70 RGB TKL_leds.json")
     km.set("esc", RGBColor(255,0,0))
 """
 
@@ -17,6 +17,7 @@ import os, json, re
 from typing import Dict, List, Optional
 from openrgb import OpenRGBClient
 from openrgb.utils import RGBColor
+from config import MAPS_DIR
 
 def _norm(s: str) -> str:
     """LED 이름 정규화: 소문자, 공백/특수문자 정리."""
@@ -98,8 +99,8 @@ class RGBLabelController:
         self.label_to_index = self._build_label_map_from_json(self.json_path)
 
     def _default_json_path(self) -> str:
-        # 기본 경로 추정: controller/maps/ 아래 첫 *_leds.json
-        maps_dir = os.path.join(os.path.dirname(__file__), "maps")
+        # 기본 경로 추정
+        maps_dir = MAPS_DIR
         for fn in os.listdir(maps_dir):
             if fn.endswith("_leds.json"):
                 return os.path.join(maps_dir, fn)

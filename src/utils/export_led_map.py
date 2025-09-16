@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 import json, csv, os
 from openrgb import OpenRGBClient
+from config import MAPS_DIR
 
-OUT_DIR = os.path.join(os.path.dirname(__file__), "maps")
-os.makedirs(OUT_DIR, exist_ok=True)
+os.makedirs(MAPS_DIR, exist_ok=True)
 
 def main():
     client = OpenRGBClient(address="127.0.0.1", port=6742, name="MapExport")
@@ -22,14 +22,14 @@ def main():
         })
 
     # CSV
-    csv_path = os.path.join(OUT_DIR, f"{kb.name}_leds.csv")
+    csv_path = os.path.join(MAPS_DIR, f"{kb.name}_leds.csv")
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=["index","name_raw"])
         w.writeheader()
         w.writerows(rows)
 
     # JSON (기본 맵)
-    json_path = os.path.join(OUT_DIR, f"{kb.name}_leds.json")
+    json_path = os.path.join(MAPS_DIR, f"{kb.name}_leds.json")
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump({"keyboard": kb.name, "leds": rows}, f, ensure_ascii=False, indent=2)
 
