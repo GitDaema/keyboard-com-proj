@@ -129,16 +129,20 @@ class RGBLabelController:
         label_map: Dict[str, int] = {}
         for label, alias_list in ALIASES.items():
             candidates: List[int] = []
+            
+            # 1. 완전 일치를 먼저 시도
             for a in alias_list:
                 key = _norm(a)
-                # 완전 일치
                 if key in name_to_indices:
                     candidates.extend(name_to_indices[key])
 
-                # 느슨한 부분일치(예: "media play/pause" ↔ "key: media play/pause")
-                for nrm_name, idxs in name_to_indices.items():
-                    if key and key in nrm_name and idxs:
-                        candidates.extend(idxs)
+            # 2. 완전 일치하는 후보가 없을 경우에만 부분 일치 시도
+            if not candidates:
+                for a in alias_list:
+                    key = _norm(a)
+                    for nrm_name, idxs in name_to_indices.items():
+                        if key and key in nrm_name and idxs:
+                            candidates.extend(idxs)
 
             # 중복 제거 + 안정화
             uniq = sorted(set(candidates))

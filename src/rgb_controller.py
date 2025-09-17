@@ -50,6 +50,7 @@ def connect():
 
     map_path = MAPS_DIR / "Corsair K70 RGB TKL_leds.json"
     km = RGBLabelController(client, json_path=map_path)
+    
     return True
 
 def disconnect():
@@ -61,6 +62,10 @@ def disconnect():
             pass
         finally:
             client = None
+
+def init_all_keys():
+    for key in km.available_labels():
+        set_key_color(key, RGBColor(0, 0, 0))
 
 def get_key_color(label: str, fresh: bool = True) -> List[Tuple[int, int, int]]:
     if kb is None or km is None:
