@@ -15,6 +15,7 @@ from rgb_controller import connect, disconnect, set_key_color, get_key_color, in
 from utils.bitgroups import set_group_value, get_group_value, copy_group_value
 import utils.keyboard_presets as kp
 import utils.color_presets as cp
+from sim.cpu import CPU
 
 def rgb_routine(label: str):
     for c in cp.HEX_COLORS.values():
@@ -36,7 +37,44 @@ def main():
         print("[INFO] All keys ready. Press Enter key to start.")
         input()
 
-        rgb_routine("esc")
+        # 데모 2: 라벨/분기 (b를 3까지 증가)
+        demo2 = [
+            "b = 0",
+            "loop:",
+            "ADDI b, #1",
+            "CMPI b, #3",
+            "BNE loop",
+            "PRINT b",
+            "HALT",
+        ]
+
+        demo3 = [
+            "a = 5",
+            "b = 9",
+            "CMP b, a",        # (9-5): Z=0, N=0, C=1(no borrow)
+            "BCC neg",         # C=0일 때만 분기 → 여기선 no-branch
+            "SUBI b, #1",      # b=8
+            "AND b, a",        # b=8 & 5 = 0 → Z=1, N=0
+            "BNE cont",        # Z=0일 때만 분기 → 여기선 no-branch
+            "PRINT b",         # 0
+            "SHL a",           # a=5<<1=10, C=(5의 MSB=0)
+            "BMI neg",         # N=1일 때만 분기 → no-branch
+            "XOR a, b",        # a=10 ^ 0 = 10 → N=0, Z=0
+            "PRINT a",         # 10
+            "HALT",
+            "neg:",
+            "PRINT b",
+            "HALT",
+            "cont:",
+            "PRINT a",
+            "HALT",
+        ]
+
+        cpu = CPU(debug=True)
+        cpu.load_program(demo3)
+        cpu.run()
+        print("Final Memory:", cpu.mem.vars)
+        input()
         
     finally:
         init_all_keys()

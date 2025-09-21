@@ -1,0 +1,160 @@
+from typing import List, Tuple, Any
+
+Op = Tuple[str, tuple[Any, ...]]
+
+def parse_line(line: str) -> List[Op]:
+    s = line.strip()
+    if not s or s.startswith("#"):
+        return [("NOP", ())]
+
+    # 라벨: "name:" (콜론이 맨 끝에 하나만 있는 경우)
+    if s.endswith(":") and (":" not in s[:-1]):
+        name = s[:-1].strip()
+        return [("LABEL", (name,))] if name else [("NOP", ())]
+
+    up = s.upper()
+
+    # 단일 토큰류
+    if up == "HALT":
+        return [("HALT", ())]
+    if up == "NOP":
+        return [("NOP", ())]
+    if up.startswith("PRINT "):
+        var = s[6:].strip()
+        return [("PRINT", (var,))]
+
+    # --- 분기/점프/비교 ---
+    if up.startswith("JMP "):
+        label = s[4:].strip()
+        return [("JMP", (label,))]
+    if up.startswith("BEQ "):
+        label = s[4:].strip()
+        return [("BEQ", (label,))]
+    if up.startswith("BNE "):
+        label = s[4:].strip()
+        return [("BNE", (label,))]
+    # C/N 기반 분기
+    if up.startswith("BCC "):
+        label = s[4:].strip()
+        return [("BCC", (label,))]
+    if up.startswith("BCS "):
+        label = s[4:].strip()
+        return [("BCS", (label,))]
+    if up.startswith("BMI "):
+        label = s[4:].strip()
+        return [("BMI", (label,))]
+    if up.startswith("BPL "):
+        label = s[4:].strip()
+        return [("BPL", (label,))]
+
+    # CMP/CMPI: 두 번째 피연산자가 '#'면 CMPI
+    if up.startswith("CMP "):
+        a, b = _split2(s[4:])
+        if b.startswith("#"):
+            return [("CMPI", (a, _parse_int(b[1:])))]
+        return [("CMP", (a, b))]
+
+    # --- 저수준: MOV/ADD/ADDI/SUB/SUBI/비트/시프트 ---
+
+    # MOV/MOVI: 두 번째가 즉시이면 MOVI
+    if up.startswith("MOV "):
+        dst, src = _split2(s[4:])
+        if src.startswith("#"):
+            return [("MOVI", (dst, _parse_int(src[1:])))]
+        return [("MOV", (dst, src))]
+
+    # ADD/ADDI: ADD dst, #imm → ADDI
+    if up.startswith("ADD "):
+        dst, src = _split2(s[4:])
+        if src.startswith("#"):
+            return [("ADDI", (dst, _parse_int(src[1:])))]
+        return [("ADD", (dst, src))]
+
+    # 명시적 ADDI 니모닉도 지원
+    if up.startswith("ADDI "):
+        dst, imm = _split2(s[5:])
+        imm = imm.strip()
+        if imm.startswith("#"):
+            return [("ADDI", (dst, _parse_int(imm[1:])))]
+        return [("ADDI", (dst, _parse_int(imm)))]
+
+    # SUB/SUBI: SUB dst, #imm → SUBI
+    if up.startswith("SUB "):
+        dst, src = _split2(s[4:])
+        if src.startswith("#"):
+            return [("SUBI", (dst, _parse_int(src[1:])))]
+        return [("SUB", (dst, src))]
+
+    # 명시적 SUBI 니모닉도 지원
+    if up.startswith("SUBI "):
+        dst, imm = _split2(s[5:])
+        imm = imm.strip()
+        if imm.startswith("#"):
+            return [("SUBI", (dst, _parse_int(imm[1:])))]
+        return [("SUBI", (dst, _parse_int(imm)))]
+
+    # 비트 연산
+    if up.startswith("AND "):
+        dst, src = _split2(s[4:])
+        return [("AND", (dst, src))]
+    if up.startswith("OR "):
+        dst, src = _split2(s[3:])
+        return [("OR", (dst, src))]
+    if up.startswith("XOR "):
+        dst, src = _split2(s[4:])
+        return [("XOR", (dst, src))]
+
+    # 시프트(단항)
+    if up.startswith("SHL "):
+        dst = s[4:].strip()
+        return [("SHL", (dst,))]
+    if up.startswith("SHR "):
+        dst = s[4:].strip()
+        return [("SHR", (dst,))]
+
+    # --- 고수준 대입식: x = y, x = y + z, x = y + #imm, x = #imm + #imm ---
+    if "=" in s:
+        left, right = [t.strip() for t in s.split("=", 1)]
+        # 덧셈 아닌 단순 대입
+        if "+" not in right:
+            if _is_int_literal(right):
+                return [("MOVI", (left, _parse_int(right)))]
+            return [("MOV", (left, right))]
+
+        # 덧셈 대입
+        a, b = [t.strip() for t in right.split("+", 1)]
+        ops: List[Op] = []
+        if _is_int_literal(a) and _is_int_literal(b):
+            ops.append(("MOVI", (left, _parse_int(a))))
+            ops.append(("ADDI", (left, _parse_int(b))))
+            return ops
+        if _is_int_literal(a) and not _is_int_literal(b):
+            ops.append(("MOV", (left, b)))
+            ops.append(("ADDI", (left, _parse_int(a))))
+            return ops
+        if not _is_int_literal(a) and _is_int_literal(b):
+            ops.append(("MOV", (left, a)))
+            ops.append(("ADDI", (left, _parse_int(b))))
+            return ops
+        ops.append(("MOV", (left, a)))
+        ops.append(("ADD", (left, b)))
+        return ops
+
+    return [("NOP", ())]
+
+# ---------------- helpers ----------------
+def _split2(body: str) -> tuple[str, str]:
+    parts = [t.strip() for t in body.split(",", 1)]
+    if len(parts) != 2:
+        return (body.strip(), "")
+    return parts[0], parts[1]
+
+def _is_int_literal(s: str) -> bool:
+    try:
+        int(s, 0)
+        return True
+    except:
+        return False
+
+def _parse_int(s: str) -> int:
+    return int(s, 0)
