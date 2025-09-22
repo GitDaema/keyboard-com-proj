@@ -18,7 +18,7 @@ def copy_group_value(
     *,
     on_color: RGBColor = cp.WHITE,
     off_color: RGBColor = cp.BLACK,
-    lsb_first: bool = True,
+    lsb_first: bool = False,
     debug: bool = False
 ):
     """
@@ -36,7 +36,7 @@ def set_group_value(
     on_color: RGBColor = cp.WHITE,
     off_color: RGBColor = cp.BLACK,
     *,
-    lsb_first: bool = True,
+    lsb_first: bool = False,
     debug: bool = False,
 ) -> Tuple[int, str, List[str], bool]:
     """
@@ -74,7 +74,7 @@ def get_group_value(
     labels: Sequence[str],
     *,
     threshold: int = 70,   # 0~255, 평균 밝기( (R+G+B)/3 ) 임계치
-    lsb_first: bool = True, # labels[0]이 LSB인지 여부
+    lsb_first: bool = False, # labels[0]이 LSB인지 여부
     fresh: bool = True,     # 매번 장치에서 새로 읽을지
     debug: bool = False
 ) -> Tuple[int, List[int], List[str]]:

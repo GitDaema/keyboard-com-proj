@@ -1,4 +1,5 @@
 import time
+import time
 from typing import List, Optional, Tuple
 from openrgb import OpenRGBClient
 from openrgb.utils import RGBColor
@@ -63,8 +64,10 @@ def disconnect():
         finally:
             client = None
 
-def init_all_keys():
+def init_all_keys(debug: bool = False):
     for key in km.available_labels():
+        if debug:
+            print(key)
         set_key_color(key, RGBColor(0, 0, 0))
 
 def get_key_color(label: str, fresh: bool = True) -> List[Tuple[int, int, int]]:
@@ -91,6 +94,7 @@ def set_key_color(label: str, color: RGBColor, debug: bool = False) -> bool:
 
     prev = get_key_color(label, fresh=True)[0] if debug else None
     ok = km.set(label, color)
+    time.sleep(0.02)  # 하드웨어 안정화 대기
 
     if ok and debug:
         after = (color.red, color.green, color.blue)

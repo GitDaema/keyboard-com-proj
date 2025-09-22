@@ -19,9 +19,44 @@ def parse_line(line: str) -> List[Op]:
         return [("HALT", ())]
     if up == "NOP":
         return [("NOP", ())]
+    if up == "ADD8":
+        return [("ADD8", ())]
+    if up == "SUB8":
+        return [("SUB8", ())]
+    if up == "PRINT_RES":         # ← 추가
+        return [("PRINT_RES", ())]
+
+    # --- PRINT 확장: "PRINT a + b"도 비트 경유 + PRINT_RES 로 ---
     if up.startswith("PRINT "):
-        var = s[6:].strip()
-        return [("PRINT", (var,))]
+        expr = s[6:].strip()
+        # 1) 덧셈 표현식: UNPACK/LOAD → ADD8 → (RES에 결과) → PRINT_RES
+        if "+" in expr:
+            a, b = [t.strip() for t in expr.split("+", 1)]
+            ops: List[Op] = []
+
+            def emit_load_into(group: str, token: str):
+                if _is_int_literal(token):
+                    ops.append(("LOADI8_BITS", (group, _parse_int(token))))
+                else:
+                    ops.append(("UNPACK1" if group=="SRC1" else "UNPACK2", (token,)))
+
+            emit_load_into("SRC1", a)
+            emit_load_into("SRC2", b)
+            ops.append(("ADD8", ()))
+            # tmp 변수 없이 RES에서 직접 출력
+            ops.append(("PRINT_RES", ()))
+            return ops
+
+        # 2) 단일 변수/리터럴: RES에 적재해놓고 바로 출력
+        ops: List[Op] = []
+        if _is_int_literal(expr):
+            ops.append(("LOADI8_BITS", ("SRC1", _parse_int(expr))))
+            ops.append(("COPYBITS", ("RES", "SRC1")))
+        else:
+            ops.append(("UNPACK1", (expr,)))
+            ops.append(("COPYBITS", ("RES", "SRC1")))
+        ops.append(("PRINT_RES", ()))
+        return ops
 
     # --- 분기/점프/비교 ---
     if up.startswith("JMP "):
@@ -120,33 +155,83 @@ def parse_line(line: str) -> List[Op]:
     if up.startswith("SHR "):
         dst = s[4:].strip()
         return [("SHR", (dst,))]
+    
+    # --- 비트 전용 마이크로옵 ---
+    # UNPACK1 var  → var 값을 SRC1 8비트로
+    # UNPACK2 var  → var 값을 SRC2 8비트로
+    # UNPACK var, SRC1|SRC2
+    if up.startswith("UNPACK1 "):
+        var = s[len("UNPACK1 "):].strip()
+        return [("UNPACK1", (var,))]
+    if up.startswith("UNPACK2 "):
+        var = s[len("UNPACK2 "):].strip()
+        return [("UNPACK2", (var,))]
+    if up.startswith("UNPACK "):
+        a, b = _split2(s[len("UNPACK "):])
+        return [("UNPACK", (a, b.upper()))]  # "SRC1"|"SRC2"
 
-    # --- 고수준 대입식 ---
+    # LOADI8_BITS group, #imm
+    if up.startswith("LOADI8_BITS "):
+        grp, imm = _split2(s[len("LOADI8_BITS "):])
+        imm = imm.strip()
+        if imm.startswith("#"):
+            return [("LOADI8_BITS", (grp.upper(), _parse_int(imm[1:])))]
+        return [("LOADI8_BITS", (grp.upper(), _parse_int(imm)))]
+
+    # CLEARBITS group
+    if up.startswith("CLEARBITS "):
+        grp = s[len("CLEARBITS "):].strip().upper()
+        return [("CLEARBITS", (grp,))]
+
+    # COPYBITS dst, src  (예: COPYBITS RES, SRC1)
+    if up.startswith("COPYBITS "):
+        dst, src = _split2(s[len("COPYBITS "):])
+        return [("COPYBITS", (dst.upper(), src.upper()))]
+
+    # PACK var   (RES 비트 → var에 패킹)
+    if up.startswith("PACK "):
+        var = s[len("PACK "):].strip()
+        return [("PACK", (var,))]
+
+    # --- 고수준 대입식(=)을 비트 마이크로옵으로 내림 ---
     if "=" in s:
         left, right = [t.strip() for t in s.split("=", 1)]
-        # 단순 대입
-        if "+" not in right:
-            if _is_int_literal(right):
-                return [("MOVI", (left, _parse_int(right)))]
-            return [("MOV", (left, right))]
-
-        # 덧셈 대입
-        a, b = [t.strip() for t in right.split("+", 1)]
         ops: List[Op] = []
-        if _is_int_literal(a) and _is_int_literal(b):
-            ops.append(("MOVI", (left, _parse_int(a))))
-            ops.append(("ADDI", (left, _parse_int(b))))
-            return ops
-        if _is_int_literal(a) and not _is_int_literal(b):
-            ops.append(("MOV", (left, b)))
-            ops.append(("ADDI", (left, _parse_int(a))))
-            return ops
-        if not _is_int_literal(a) and _is_int_literal(b):
-            ops.append(("MOV", (left, a)))
-            ops.append(("ADDI", (left, _parse_int(b))))
-            return ops
-        ops.append(("MOV", (left, a)))
-        ops.append(("ADD", (left, b)))
+
+        def emit_load_into(group: str, token: str):
+            """group: 'SRC1'|'SRC2'에 token(변수 또는 리터럴)을 적재"""
+            if _is_int_literal(token):
+                ops.append(("LOADI8_BITS", (group, _parse_int(token))))
+            else:
+                if group == "SRC1":
+                    ops.append(("UNPACK1", (token,)))
+                else:
+                    ops.append(("UNPACK2", (token,)))
+
+        # 덧셈 대입: x = a + b
+        if "+" in right:
+            a, b = [t.strip() for t in right.split("+", 1)]
+            if a != "":                  # ← a가 비어있지 않을 때만 이항 인식
+                emit_load_into("SRC1", a)
+                emit_load_into("SRC2", b)
+                ops.append(("ADD8", ()))
+                ops.append(("PACK", (left,)))
+                return ops
+
+        # 뺄셈 대입(선택): x = a - b  → 마이크로옵으로 내려 쓰고 싶다면 여기에 추가
+        if "-" in right:
+            a, b = [t.strip() for t in right.split("-", 1)]
+            if a != "":                  # ← a가 비어있지 않을 때만 이항 인식
+                emit_load_into("SRC1", a)
+                emit_load_into("SRC2", b)
+                ops.append(("SUB8", ()))
+                ops.append(("PACK", (left,)))
+                return ops
+
+        # 단순 대입: x = y  또는 x = 5
+        emit_load_into("SRC1", right)
+        ops.append(("COPYBITS", ("RES", "SRC1")))  # RES ← SRC1
+        ops.append(("PACK", (left,)))             # RES 패킹 → x
         return ops
 
     return [("NOP", ())]

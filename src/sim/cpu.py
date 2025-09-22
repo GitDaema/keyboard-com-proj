@@ -9,6 +9,10 @@ from sim.data_memory_rgb_visual import DataMemoryRGBVisual
 from sim.program_memory import ProgramMemory
 from sim.parser import parse_line
 
+from utils.bit_lut import add8_via_lut, sub8_via_lut  # sub8_via_lut 새로 사용
+from utils.keyboard_presets import SRC1, SRC2, RES
+
+
 """
 # =========================
 # CPU/Parser 명령어 정리 (signed 버전)
@@ -186,6 +190,37 @@ class CPU:
             pass
         self._println("[RUN] Execution finished.\n")
 
+    def _group_labels(self, grp: str):
+        g = grp.upper()
+        if g == "SRC1": return SRC1
+        if g == "SRC2": return SRC2
+        if g == "RES":  return RES
+        raise ValueError(f"unknown bit-group: {grp}")
+
+    def _write_u8_to_group(self, grp: str, u8: int):
+        labels = self._group_labels(grp)
+        u8 &= 0xFF
+        width = len(labels)
+        # labels[-1]이 LSB가 되도록 역인덱싱
+        for i in range(width):  # i=0..7 -> 비트 i
+            bit = (u8 >> i) & 1
+            lab = labels[width - 1 - i]
+            self.mem.set(lab, bit)
+
+    def _clear_group(self, grp: str):
+        for lab in self._group_labels(grp):
+            self.mem.set(lab, 0)
+
+    def _read_u8_from_group(self, grp: str) -> int:
+        labels = self._group_labels(grp)
+        width = len(labels)
+        val = 0
+        # labels[-1]이 LSB → 역인덱싱으로 읽어서 i번째 비트로
+        for i in range(width):  # i=0..7
+            lab = labels[width - 1 - i]
+            val |= (int(self.mem.get(lab)) & 1) << i
+        return val & 0xFF
+
     # ---------- 내부 실행기 ----------
     def _exec_one(self, op: str, args: tuple[Any, ...]) -> Dict[str, int]:
         ch: Dict[str, int] = {}
@@ -210,6 +245,12 @@ class CPU:
             val = self.mem.get(var)
             self._on_execute(f"PRINT {var} -> {val}")
             return ch
+        
+        if op == "PRINT_RES":
+            u8 = self._read_u8_from_group("RES")
+            v  = u8 if u8 < 128 else u8 - 256   # two's complement
+            self._on_execute(f"PRINT_RES -> {v}")
+            return ch
 
         # --- MOV/MOVI ---
         if op == "MOVI":
@@ -225,6 +266,58 @@ class CPU:
             self.mem.set(str(dst), v)
             self._on_execute(f"MOV  {dst}, {src} ; {dst}={v}")
             ch[str(dst)] = self.mem.get(str(dst))
+            return ch
+        
+        if op == "UNPACK1":
+            (var,) = args
+            v = self.mem.get(str(var))         # -128..127
+            self._write_u8_to_group("SRC1", v & 0xFF)
+            self._on_execute(f"UNPACK1 {var} → SRC1")
+            return ch
+
+        if op == "UNPACK2":
+            v = self.mem.get(str(var))
+            self._write_u8_to_group("SRC2", v & 0xFF)
+            self._on_execute(f"UNPACK2 {var} → SRC2")
+            return ch
+
+        if op == "UNPACK":
+            var, grp = args
+            v = self.mem.get(str(var))
+            self._write_u8_to_group(str(grp), v & 0xFF)
+            self._on_execute(f"UNPACK {var} → {grp}")
+            return ch
+
+        # LOADI8_BITS
+        if op == "LOADI8_BITS":
+            grp, imm = args
+            self._write_u8_to_group(str(grp), int(imm))
+            self._on_execute(f"LOADI8_BITS {grp}, #{int(imm)&0xFF}")
+            return ch
+
+        # CLEARBITS
+        if op == "CLEARBITS":
+            (grp,) = args
+            self._clear_group(str(grp))
+            self._on_execute(f"CLEARBITS {grp}")
+            return ch
+
+        # COPYBITS
+        if op == "COPYBITS":
+            dst, src = args
+            src_labels = self._group_labels(str(src))
+            dst_labels = self._group_labels(str(dst))
+            
+            # 1. Read all bits from source group first
+            bits = []
+            for label in src_labels:
+                bits.append(int(self.mem.get(label)) & 1)
+
+            # 2. Then write all bits to destination group
+            for i, label in enumerate(dst_labels):
+                self.mem.set(label, bits[i])
+            
+            self._on_execute(f"COPYBITS {dst}, {src}")
             return ch
 
         # --- ADD/ADDI (signed: Z/N/V 갱신) ---
@@ -252,6 +345,11 @@ class CPU:
             ch[str(dst)] = v
             return ch
 
+        if op == "ADD8":
+            add8_via_lut(self.mem, src1=SRC1, src2=SRC2, dst=RES, lsb_first=False)
+            self._on_execute("ADD8 (via LUT) ; RES ← SRC1 + SRC2")
+            return ch
+
         # --- SUB/SUBI (signed: Z/N/V 갱신) ---
         if op == "SUBI":
             dst, imm = args
@@ -275,6 +373,21 @@ class CPU:
             _set_zn_from_val(self.flags, v)
             self._on_execute(f"SUB  {dst}, {src} ; {dst}:{a}-{b}→{v} | Z={self.flags['Z']} N={self.flags['N']} V={self.flags['V']}")
             ch[str(dst)] = v
+            return ch
+
+        if op == "SUB8":
+            sub8_via_lut(self.mem, src1=SRC1, src2=SRC2, dst=RES, lsb_first=False)
+            self._on_execute("SUB8 (via LUT) ; RES ← SRC1 - SRC2")
+            return ch
+
+        if op == "PACK":
+            (var,) = args
+            u8 = self._read_u8_from_group("RES")
+            # two's complement -> signed -128..127
+            v = u8 if u8 < 128 else u8 - 256
+            self.mem.set(str(var), v)
+            ch[str(var)] = v
+            self._on_execute(f"PACK {var} ← RES ({v})")
             return ch
 
         # --- 비트 연산 (Z/N 갱신, V=0) ---

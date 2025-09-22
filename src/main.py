@@ -45,28 +45,14 @@ def main():
         # 2) 프로그램: 상태가 전부 “불빛”에 저장됨
         program = [
             "start:",
-            "x = -97",       # q 테스트를 원하면 'q = -97' 처럼 라벨과 일치시켜도 됨
-            "w = 77",
-            "e = 0",
-
-            # 연산 테스트(불빛이 바로 갱신됨)
-            "x = x + 20",    # -97 + 20 = -77
-            "PRINT x",
-
-            "CMP w, #77",    # w == 77 → Z=1
-            "BEQ ok",
-            "PRINT w",       # (실행되지 않아야 정상)
-            "JMP end",
-
-            "ok:",
-            "PRINT w",       # 77
-
-            "end:",
-            "HALT",
+            "q = -1",
+            "PRINT q",
+            "HALT"
         ]
 
         cpu.load_program(program)
         cpu.run()
+        
         input()
         
     finally:

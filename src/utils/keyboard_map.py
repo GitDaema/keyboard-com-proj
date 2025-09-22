@@ -13,7 +13,7 @@ JSON(…_leds.json)을 직접 읽어 라벨→인덱스 매핑을 즉석에서 �
     km.set("esc", RGBColor(255,0,0))
 """
 
-import os, json, re
+import os, json, re, time
 from typing import Dict, List, Optional
 from openrgb import OpenRGBClient
 from openrgb.utils import RGBColor
@@ -167,6 +167,7 @@ class RGBLabelController:
 
         try:
             kb.leds[idx].set_color(color)
+            time.sleep(0.05)  # 하드웨어/서버 업데이트 대기
             return True
         except Exception:
             return False
