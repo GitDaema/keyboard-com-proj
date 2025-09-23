@@ -34,6 +34,7 @@ def bitgroup_test(n: int):
 def main():
     try:
         connect()
+        time.sleep(0.6)
         init_all_keys()
         print("[INFO] All keys ready. Press Enter key to start.")
         input()
@@ -45,8 +46,27 @@ def main():
         # 2) 프로그램: 상태가 전부 “불빛”에 저장됨
         program = [
             "start:",
-            "q = -1",
-            "PRINT q",
+            "a = 5",
+            "b = 5",
+            "CMP a, b",
+            "BEQ equal_case",
+            "JMP fail",
+            "equal_case:",
+            "b = -7",
+            "CMP b, a",
+            "BMI negative_case",
+            "JMP fail",
+            "negative_case:",
+            "CMP a, #2",
+            "BPL positive_case",
+            "JMP fail",
+            "positive_case:",
+            "CMP b, #0",
+            "BNE done",
+            "JMP fail",
+            "done:",
+            "HALT",
+            "fail:",
             "HALT"
         ]
 

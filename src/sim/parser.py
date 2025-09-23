@@ -211,7 +211,17 @@ def parse_line(line: str) -> List[Op]:
         # 덧셈 대입: x = a + b
         if "+" in right:
             a, b = [t.strip() for t in right.split("+", 1)]
-            if a != "":                  # ← a가 비어있지 않을 때만 이항 인식
+            if a != "":  # 이항 연산 인식
+                # DEBUG:
+                print(f"[PARSER DEBUG] left='{left}', a='{a}', b='{b}', is_b_int={_is_int_literal(b)}")
+
+                # 최적화: a = a + 5  →  ADDI a, 5
+                if left == a and _is_int_literal(b):
+                    return [("ADDI", (left, _parse_int(b)))]
+                if left == b and _is_int_literal(a):
+                    return [("ADDI", (left, _parse_int(a)))]
+
+                # 일반적인 경우: c = a + b
                 emit_load_into("SRC1", a)
                 emit_load_into("SRC2", b)
                 ops.append(("ADD8", ()))

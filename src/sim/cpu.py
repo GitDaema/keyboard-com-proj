@@ -9,7 +9,10 @@ from sim.data_memory_rgb_visual import DataMemoryRGBVisual
 from sim.program_memory import ProgramMemory
 from sim.parser import parse_line
 
-from utils.bit_lut import add8_via_lut, sub8_via_lut  # sub8_via_lut 새로 사용
+from utils.bit_lut import (
+    add8_via_lut, sub8_via_lut, and8_via_lut, or8_via_lut, xor8_via_lut,
+    shl8_via_lut, shr8_via_lut
+)
 from utils.keyboard_presets import SRC1, SRC2, RES
 
 
@@ -69,22 +72,6 @@ def _sign_bit(x: int) -> int:
 def _set_zn_from_val(flags: Dict[str, int], v: int) -> None:
     flags["Z"] = 1 if v == 0 else 0
     flags["N"] = 1 if v < 0 else 0
-
-def _add_s8(a: int, b: int) -> tuple[int, int]:
-    """signed 8비트 덧셈: 결과와 overflow(V) 반환"""
-    res = _wrap_s8(a + b)
-    # overflow 조건: (~(a ^ b) & (a ^ res))의 부호비트가 1
-    au, bu, ru = _to_u8(a), _to_u8(b), _to_u8(res)
-    v = 1 if (((~(au ^ bu)) & (au ^ ru)) & 0x80) != 0 else 0
-    return res, v
-
-def _sub_s8(a: int, b: int) -> tuple[int, int]:
-    """signed 8비트 뺄셈: a-b 결과와 overflow(V) 반환"""
-    res = _wrap_s8(a - b)
-    # overflow 조건: ((a ^ b) & (a ^ res))의 부호비트가 1
-    au, bu, ru = _to_u8(a), _to_u8(b), _to_u8(res)
-    v = 1 if (((au ^ bu) & (au ^ ru)) & 0x80) != 0 else 0
-    return res, v
 
 class CPU:
     def __init__(self, *, debug: bool = False, mem=None, interactive: bool = False) -> None:
@@ -276,6 +263,7 @@ class CPU:
             return ch
 
         if op == "UNPACK2":
+            (var,) = args
             v = self.mem.get(str(var))
             self._write_u8_to_group("SRC2", v & 0xFF)
             self._on_execute(f"UNPACK2 {var} → SRC2")
@@ -323,26 +311,49 @@ class CPU:
         # --- ADD/ADDI (signed: Z/N/V 갱신) ---
         if op == "ADDI":
             dst, imm = args
-            a = self.mem.get(str(dst))
+            dst_name = str(dst)
+            a = self.mem.get(dst_name)
             b = int(imm)
-            v, ov = _add_s8(a, b)
-            self.mem.set(str(dst), v)
-            self.flags["V"] = ov
+
+            self._write_u8_to_group("SRC1", _to_u8(a))
+            self._write_u8_to_group("SRC2", _to_u8(b))
+            add8_via_lut(self.mem, src1=SRC1, src2=SRC2, dst=RES, lsb_first=False)
+
+            res_u8 = self._read_u8_from_group("RES")
+            v = res_u8 if res_u8 < 128 else res_u8 - 256
+            self.mem.set(dst_name, v)
+
+            inputs_same_sign = _sign_bit(a) == _sign_bit(b)
+            self.flags["V"] = 1 if inputs_same_sign and (_sign_bit(a) != _sign_bit(v)) else 0
             _set_zn_from_val(self.flags, v)
-            self._on_execute(f"ADDI {dst}, #{imm} ; {dst}:{a}+{b}→{v} | Z={self.flags['Z']} N={self.flags['N']} V={self.flags['V']}")
-            ch[str(dst)] = v
+            self._on_execute(
+                f"ADDI {dst}, #{imm} ; via LUT {dst_name}:{a}+{b}->{v} | Z={self.flags['Z']} N={self.flags['N']} V={self.flags['V']}"
+            )
+            ch[dst_name] = v
             return ch
 
         if op == "ADD":
             dst, src = args
-            a = self.mem.get(str(dst))
-            b = self.mem.get(str(src))
-            v, ov = _add_s8(a, b)
-            self.mem.set(str(dst), v)
-            self.flags["V"] = ov
+            dst_name = str(dst)
+            src_name = str(src)
+            a = self.mem.get(dst_name)
+            b = self.mem.get(src_name)
+
+            self._write_u8_to_group("SRC1", _to_u8(a))
+            self._write_u8_to_group("SRC2", _to_u8(b))
+            add8_via_lut(self.mem, src1=SRC1, src2=SRC2, dst=RES, lsb_first=False)
+
+            res_u8 = self._read_u8_from_group("RES")
+            v = res_u8 if res_u8 < 128 else res_u8 - 256
+            self.mem.set(dst_name, v)
+
+            inputs_same_sign = _sign_bit(a) == _sign_bit(b)
+            self.flags["V"] = 1 if inputs_same_sign and (_sign_bit(a) != _sign_bit(v)) else 0
             _set_zn_from_val(self.flags, v)
-            self._on_execute(f"ADD  {dst}, {src} ; {dst}:{a}+{b}→{v} | Z={self.flags['Z']} N={self.flags['N']} V={self.flags['V']}")
-            ch[str(dst)] = v
+            self._on_execute(
+                f"ADD  {dst}, {src} ; via LUT {dst_name}:{a}+{b}->{v} | Z={self.flags['Z']} N={self.flags['N']} V={self.flags['V']}"
+            )
+            ch[dst_name] = v
             return ch
 
         if op == "ADD8":
@@ -353,26 +364,45 @@ class CPU:
         # --- SUB/SUBI (signed: Z/N/V 갱신) ---
         if op == "SUBI":
             dst, imm = args
-            a = self.mem.get(str(dst))
+            dst_name = str(dst)
+            a = self.mem.get(dst_name)
             b = int(imm)
-            v, ov = _sub_s8(a, b)
-            self.mem.set(str(dst), v)
-            self.flags["V"] = ov
+
+            self._write_u8_to_group("SRC1", _to_u8(a))
+            self._write_u8_to_group("SRC2", _to_u8(b))
+            sub8_via_lut(self.mem, src1=SRC1, src2=SRC2, dst=RES, lsb_first=False)
+
+            res_u8 = self._read_u8_from_group("RES")
+            v = res_u8 if res_u8 < 128 else res_u8 - 256
+            self.mem.set(dst_name, v)
+
+            inputs_diff_sign = _sign_bit(a) != _sign_bit(b)
+            self.flags["V"] = 1 if inputs_diff_sign and (_sign_bit(a) != _sign_bit(v)) else 0
             _set_zn_from_val(self.flags, v)
-            self._on_execute(f"SUBI {dst}, #{imm} ; {dst}:{a}-{b}→{v} | Z={self.flags['Z']} N={self.flags['N']} V={self.flags['V']}")
-            ch[str(dst)] = v
+            self._on_execute(f"SUBI {dst}, #{imm} ; via LUT {dst_name}:{a}-{b}→{v} | Z={self.flags['Z']} N={self.flags['N']} V={self.flags['V']}")
+            ch[dst_name] = v
             return ch
 
         if op == "SUB":
             dst, src = args
-            a = self.mem.get(str(dst))
-            b = self.mem.get(str(src))
-            v, ov = _sub_s8(a, b)
-            self.mem.set(str(dst), v)
-            self.flags["V"] = ov
+            dst_name = str(dst)
+            src_name = str(src)
+            a = self.mem.get(dst_name)
+            b = self.mem.get(src_name)
+
+            self._write_u8_to_group("SRC1", _to_u8(a))
+            self._write_u8_to_group("SRC2", _to_u8(b))
+            sub8_via_lut(self.mem, src1=SRC1, src2=SRC2, dst=RES, lsb_first=False)
+
+            res_u8 = self._read_u8_from_group("RES")
+            v = res_u8 if res_u8 < 128 else res_u8 - 256
+            self.mem.set(dst_name, v)
+
+            inputs_diff_sign = _sign_bit(a) != _sign_bit(b)
+            self.flags["V"] = 1 if inputs_diff_sign and (_sign_bit(a) != _sign_bit(v)) else 0
             _set_zn_from_val(self.flags, v)
-            self._on_execute(f"SUB  {dst}, {src} ; {dst}:{a}-{b}→{v} | Z={self.flags['Z']} N={self.flags['N']} V={self.flags['V']}")
-            ch[str(dst)] = v
+            self._on_execute(f"SUB  {dst}, {src} ; via LUT {dst_name}:{a}-{b}→{v} | Z={self.flags['Z']} N={self.flags['N']} V={self.flags['V']}")
+            ch[dst_name] = v
             return ch
 
         if op == "SUB8":
@@ -383,7 +413,6 @@ class CPU:
         if op == "PACK":
             (var,) = args
             u8 = self._read_u8_from_group("RES")
-            # two's complement -> signed -128..127
             v = u8 if u8 < 128 else u8 - 256
             self.mem.set(str(var), v)
             ch[str(var)] = v
@@ -391,87 +420,89 @@ class CPU:
             return ch
 
         # --- 비트 연산 (Z/N 갱신, V=0) ---
-        if op == "AND":
+        if op in ("AND", "OR", "XOR"):
             dst, src = args
-            a = self.mem.get(str(dst))
-            b = self.mem.get(str(src))
-            v = _wrap_s8(_to_u8(a) & _to_u8(b))
-            self.mem.set(str(dst), v)
-            self.flags["V"] = 0
-            _set_zn_from_val(self.flags, v)
-            self._on_execute(f"AND  {dst}, {src} ; {dst}:{a}&{b}→{v} | Z={self.flags['Z']} N={self.flags['N']}")
-            ch[str(dst)] = v
-            return ch
+            dst_name, src_name = str(dst), str(src)
+            a = self.mem.get(dst_name)
+            b = self.mem.get(src_name)
 
-        if op == "OR":
-            dst, src = args
-            a = self.mem.get(str(dst))
-            b = self.mem.get(str(src))
-            v = _wrap_s8(_to_u8(a) | _to_u8(b))
-            self.mem.set(str(dst), v)
-            self.flags["V"] = 0
-            _set_zn_from_val(self.flags, v)
-            self._on_execute(f"OR   {dst}, {src} ; {dst}:{a}|{b}→{v} | Z={self.flags['Z']} N={self.flags['N']}")
-            ch[str(dst)] = v
-            return ch
+            self._write_u8_to_group("SRC1", _to_u8(a))
+            self._write_u8_to_group("SRC2", _to_u8(b))
 
-        if op == "XOR":
-            dst, src = args
-            a = self.mem.get(str(dst))
-            b = self.mem.get(str(src))
-            v = _wrap_s8(_to_u8(a) ^ _to_u8(b))
-            self.mem.set(str(dst), v)
+            lut_func = {
+                "AND": and8_via_lut, "OR": or8_via_lut, "XOR": xor8_via_lut
+            }[op]
+            lut_func(self.mem, src1=SRC1, src2=SRC2, dst=RES, lsb_first=False)
+
+            res_u8 = self._read_u8_from_group("RES")
+            v = res_u8 if res_u8 < 128 else res_u8 - 256
+            self.mem.set(dst_name, v)
+
             self.flags["V"] = 0
             _set_zn_from_val(self.flags, v)
-            self._on_execute(f"XOR  {dst}, {src} ; {dst}:{a}^{b}→{v} | Z={self.flags['Z']} N={self.flags['N']}")
-            ch[str(dst)] = v
+            op_symbol = {'AND':'&', 'OR':'|', 'XOR':'^'}[op]
+            self._on_execute(f"{op:<4} {dst}, {src} ; via LUT {dst_name}:{a}{op_symbol}{b}→{v} | Z={self.flags['Z']} N={self.flags['N']}")
+            ch[dst_name] = v
             return ch
 
         # --- 시프트 ---
         if op == "SHL":
             dst, = args
-            a = self.mem.get(str(dst))
-            v = _wrap_s8(a << 1)
+            dst_name = str(dst)
+            a = self.mem.get(dst_name)
+            
+            self._write_u8_to_group("SRC1", _to_u8(a))
+            shl8_via_lut(self.mem, src=SRC1, dst=RES, lsb_first=False)
+            
+            res_u8 = self._read_u8_from_group("RES")
+            v = res_u8 if res_u8 < 128 else res_u8 - 256
+            
             # SHL overflow: 최상위 비트 변화 여부로 판단
             ov = 1 if (_sign_bit(a) != _sign_bit(v)) else 0
-            self.mem.set(str(dst), v)
+            self.mem.set(dst_name, v)
             self.flags["V"] = ov
             _set_zn_from_val(self.flags, v)
-            self._on_execute(f"SHL  {dst} ; {a:4d}<<1 -> {v:4d} | V={ov} Z={self.flags['Z']} N={self.flags['N']}")
-            ch[str(dst)] = v
+            self._on_execute(f"SHL  {dst} ; via LUT {a:4d}<<1 -> {v:4d} | V={ov} Z={self.flags['Z']} N={self.flags['N']}")
+            ch[dst_name] = v
             return ch
 
         if op == "SHR":
             dst, = args
-            a = self.mem.get(str(dst))
-            # 산술 시프트(ASR): 파이썬의 >> 는 부호 유지됨
-            v = _wrap_s8(a >> 1)
-            self.mem.set(str(dst), v)
-            self.flags["V"] = 0
+            dst_name = str(dst)
+            a = self.mem.get(dst_name)
+
+            self._write_u8_to_group("SRC1", _to_u8(a))
+            shr8_via_lut(self.mem, src=SRC1, dst=RES, lsb_first=False)
+
+            res_u8 = self._read_u8_from_group("RES")
+            v = res_u8 if res_u8 < 128 else res_u8 - 256
+            self.mem.set(dst_name, v)
+
+            self.flags["V"] = 0 # ASR은 오버플로우 없음
             _set_zn_from_val(self.flags, v)
-            self._on_execute(f"SHR  {dst} ; {a:4d}>>1 -> {v:4d} | V=0 Z={self.flags['Z']} N={self.flags['N']}")
-            ch[str(dst)] = v
+            self._on_execute(f"SHR  {dst} ; via LUT {a:4d}>>1 -> {v:4d} | V=0 Z={self.flags['Z']} N={self.flags['N']}")
+            ch[dst_name] = v
             return ch
 
         # --- 비교/분기 ---
-        if op == "CMP":
-            a, b = args
-            va = self.mem.get(str(a))
-            vb = self.mem.get(str(b))
-            res, ov = _sub_s8(va, vb)
-            self.flags["V"] = ov
-            _set_zn_from_val(self.flags, res)
-            self._on_execute(f"CMP  {a}, {b} ; ({va}-{vb}) → Z={self.flags['Z']} N={self.flags['N']} V={self.flags['V']}")
-            return ch
+        if op == "CMP" or op == "CMPI":
+            a_name, b_arg = args
+            a = self.mem.get(str(a_name))
+            b = int(b_arg) if op == "CMPI" else self.mem.get(str(b_arg))
 
-        if op == "CMPI":
-            a, imm = args
-            va = self.mem.get(str(a))
-            vb = int(imm)
-            res, ov = _sub_s8(va, vb)
-            self.flags["V"] = ov
-            _set_zn_from_val(self.flags, res)
-            self._on_execute(f"CMPI {a}, #{imm} ; ({va}-{vb}) → Z={self.flags['Z']} N={self.flags['N']} V={self.flags['V']}")
+            self._write_u8_to_group("SRC1", _to_u8(a))
+            self._write_u8_to_group("SRC2", _to_u8(b))
+            sub8_via_lut(self.mem, src1=SRC1, src2=SRC2, dst=RES, lsb_first=False)
+
+            res_u8 = self._read_u8_from_group("RES")
+            v = res_u8 if res_u8 < 128 else res_u8 - 256
+
+            inputs_diff_sign = _sign_bit(a) != _sign_bit(b)
+            self.flags["V"] = 1 if inputs_diff_sign and (_sign_bit(a) != _sign_bit(v)) else 0
+            _set_zn_from_val(self.flags, v)
+            
+            b_str = f"#{b}" if op == "CMPI" else str(b_arg)
+            self._on_execute(f"{op:<4} {a_name}, {b_str} ; via LUT ({a}-{b}) → Z={self.flags['Z']} N={self.flags['N']} V={self.flags['V']}")
             return ch
 
         if op == "JMP":
