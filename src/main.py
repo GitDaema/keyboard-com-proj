@@ -36,7 +36,7 @@ def main():
         connect()
         time.sleep(0.6)
         init_all_keys()
-        print("[INFO] All keys ready. Press Enter key to start.")
+        print("[INFO] All keys ready. Press Enter to start.")
         input()
 
         mem=DataMemoryRGBVisual(binary_labels=kp.BINARY_COLORS)
@@ -44,29 +44,30 @@ def main():
         cpu = CPU(debug=True, mem=mem, interactive=True)
 
         # 2) 프로그램: 상태가 전부 “불빛”에 저장됨
+        #
+        # 분기문 작성법(멀티라인 블록):
+        # - 문법: IF <lhs> <op> <rhs> THEN ... [ELSE ...] END
+        # - 지원 비교 연산자(서명 8비트 기준): ==, !=, <, >, <=, >=
+        # - 즉시값은 #10, #0x1F, #-3 또는 # 없이 10, 0x1F, -3 모두 가능
+        # - THEN은 같은 줄에 반드시 위치해야 하며, 블록은 END(또는 ENDIF)로 닫아야 합니다.
+        # - ELSE는 선택사항입니다.
+        # - 내부적으로 CMP/CMPI + 분기(BEQ/BNE/BMI/BPL/BVS/BVC)로 전개됩니다.
+        # - 자동 생성 라벨(__IF{n}_*)이 생기므로 같은 이름의 라벨을 직접 사용하지 마세요.
+        # - 변수 이름은 utils/keyboard_presets.py의 VARIABLE_KEYS만 사용하세요:
+        #   {'q','w','e','r','a','s','d','z','x'}
         program = [
             "start:",
-            "a = 5",
-            "b = 5",
-            "CMP a, b",
-            "BEQ equal_case",
-            "JMP fail",
-            "equal_case:",
-            "b = -7",
-            "CMP b, a",
-            "BMI negative_case",
-            "JMP fail",
-            "negative_case:",
-            "CMP a, #2",
-            "BPL positive_case",
-            "JMP fail",
-            "positive_case:",
-            "CMP b, #0",
-            "BNE done",
-            "JMP fail",
-            "done:",
-            "HALT",
-            "fail:",
+            # 초기값 설정
+            "q = -16",      # 허용 변수
+            "w = -8",     # 허용 변수
+            "r = -4",      # 허용 변수
+            "a = 0",      # 허용 변수
+            "s = 4",
+            "z = 8",
+            
+            "q = q + w",
+            "w = w - r",
+
             "HALT"
         ]
 

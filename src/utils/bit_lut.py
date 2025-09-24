@@ -1,7 +1,7 @@
 # utils/bit_lut.py
 
 from typing import Tuple, Sequence
-from utils.keyboard_presets import SRC1, SRC2, RES
+from utils.keyboard_presets import SRC1, SRC2, RES, STEP_LABELS
 
 # 1비트 Full Adder 표: (A,B,Cin) -> (Sum,Cout)
 # 논리/산술 연산자 없이, 순수 매핑만 사용
@@ -55,8 +55,22 @@ def add8_via_lut(mem, *, src1: Sequence[str] = SRC1, src2: Sequence[str] = SRC2,
         a = _to_bit_str(mem.get(src1[i]))
         b = _to_bit_str(mem.get(src2[i]))
         s, cout = ADD_LUT[(a, b, cin)]
+        # 단계 표시: Cin -> Sum -> Cout (표시용 키가 있을 때만)
+        try:
+            mem.set(STEP_LABELS["CIN"], _from_bit_str(cin))
+            mem.set(STEP_LABELS["SUM"], _from_bit_str(s))
+            mem.set(STEP_LABELS["COUT"], _from_bit_str(cout))
+        except Exception:
+            pass
         mem.set(dst[i], _from_bit_str(s))
         cin = cout
+    # 표시등 끄기 (있으면)
+    try:
+        mem.set(STEP_LABELS["CIN"], 0)
+        mem.set(STEP_LABELS["SUM"], 0)
+        mem.set(STEP_LABELS["COUT"], 0)
+    except Exception:
+        pass
 
 def sub8_via_lut(mem, *, src1: Sequence[str] = SRC1, src2: Sequence[str] = SRC2, dst: Sequence[str] = RES,
                  lsb_first: bool = True) -> None:
@@ -69,8 +83,20 @@ def sub8_via_lut(mem, *, src1: Sequence[str] = SRC1, src2: Sequence[str] = SRC2,
         a = _to_bit_str(mem.get(src1[i]))
         b = _to_bit_str(mem.get(src2[i]))
         d, bout = SUB_LUT[(a, b, bin_)]
+        try:
+            mem.set(STEP_LABELS["CIN"], _from_bit_str(bin_))
+            mem.set(STEP_LABELS["SUM"], _from_bit_str(d))
+            mem.set(STEP_LABELS["COUT"], _from_bit_str(bout))
+        except Exception:
+            pass
         mem.set(dst[i], _from_bit_str(d))
         bin_ = bout
+    try:
+        mem.set(STEP_LABELS["CIN"], 0)
+        mem.set(STEP_LABELS["SUM"], 0)
+        mem.set(STEP_LABELS["COUT"], 0)
+    except Exception:
+        pass
 
 def and8_via_lut(mem, *, src1: Sequence[str] = SRC1, src2: Sequence[str] = SRC2, dst: Sequence[str] = RES,
                  lsb_first: bool = True) -> None:

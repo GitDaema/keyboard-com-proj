@@ -1,0 +1,92 @@
+고수준 언어 문법과 파싱/전개 개요
+---------------------------------
+
+본 프로젝트는 고수준 문장을 파서가 저수준(마이크로/ISA 유사) 시퀀스로 전개하고,
+CPU가 LED 비트(SRC1/SRC2/RES) + LUT(bit_lut.py)로 실제 키보드 불빛만을 이용해 계산합니다.
+
+기본 개념
+- 값 범위: 서명 8비트(-128..127), 내부 저장과 연산은 2의 보수 기반.
+- 플래그: Z(Zero), N(Negative), V(Overflow). 비교/분기와 산술 연산에 사용.
+- 변수(허용 이름): utils/keyboard_presets.py의 VARIABLE_KEYS에 한정
+  • { q, w, e, r, a, s, d, z, x }
+- 비트 그룹: SRC1, SRC2, RES (각 8비트). 파서 전개 시 여기에 값을 언팩하여 LUT로 계산.
+
+즉시값 표기
+- 정수 리터럴은 10진/16진/음수 모두 허용: 5, -3, 0x1F
+- ‘#’ 접두 허용: #5, #-3, #0x1F (CMPI 등에서 관용적으로 사용)
+
+라벨과 점프
+- 라벨: `name:` 꼴의 단독 줄
+- 무조건 점프: `JMP label`
+
+출력
+- `PRINT var` 또는 `PRINT 5` → 파서가 UNPACK/LOAD 후 RES로 복사하여 `PRINT_RES` 실행
+- `PRINT a + b` → UNPACK/LOAD → `ADD8` → `PRINT_RES`
+
+고수준 대입/산술(파서 매크로 전개)
+- 대입: `x = y` 또는 `x = #imm`
+  → UNPACK1/LOADI8_BITS → COPYBITS RES,SRC1 → PACK x
+- 덧셈: `x = a + b` (a/b는 변수 또는 즉시값)
+  → UNPACK1/LOADI8_BITS → UNPACK2/LOADI8_BITS → ADD8 → PACK x
+- 뺄셈: `x = a - b` (a/b는 변수 또는 즉시값)
+  → UNPACK1/LOADI8_BITS → UNPACK2/LOADI8_BITS → SUB8 → PACK x
+- 최적화: `a = a + #k` 또는 `a = #k + a` → `ADDI a, #k`
+
+저수준 산술/비트/시프트 명령(파서 직접 인식)
+- 산술: `ADD dst, src` / `ADDI dst, #imm`, `SUB dst, src` / `SUBI dst, #imm`
+- 비트: `AND/OR/XOR dst, src`
+- 시프트: `SHL dst`, `SHR dst`(산술 시프트)
+- 비교: `CMP a, b`, `CMPI a, #imm`
+- 분기: `BEQ/BNE`(Z), `BMI/BPL`(N), `BVS/BVC`(V), `BCS/BCC`(V의 별칭)
+
+멀티라인 블록 문법(전처리기 preprocess_program)
+- 형태: `IF <lhs> <op> <rhs> THEN` … `[ELSE]` … `END`
+  • 들여쓰기는 선택(가독성용). 탭/스페이스 모두 무시됨.
+  • THEN은 반드시 같은 줄에 있어야 함(헤더 종료 마커).
+  • `ELSE`, `END/ENDIF/END IF`는 단독 줄 권장.
+  • 중첩 IF 지원.
+  • 자동 생성 라벨: `__IF{n}_ELSE`, `__IF{n}_END`, 필요 시 `__IF{n}_V0`, `__IF{n}_CONT` 등.
+- 지원 비교 연산자(서명 비교): `==`, `!=`, `<`, `>`, `<=`, `>=`
+- 전개 원리: 항상 `a-b`를 기준으로 `CMP/CMPI` 실행 후 Z/N/V를 해석해 분기
+  • `==`: 참(Z=1). 거짓이면 `BNE ELSE`
+  • `!=`: 참(Z=0). 거짓이면 `BEQ ELSE`
+  • `<` : 참(N xor V=1). 거짓(GE)이면 V/N 조합을 이용해 ELSE로 이동
+  • `>=`: 거짓이 LT. LT 조합에 해당하면 ELSE로 이동
+  • `<=`: 참(Z=1 or LT). 거짓(GT)이면 ELSE로 이동
+  • `>` : 참(Z=0 and GE). 거짓(LE)이면 ELSE로 이동
+
+CPU 실행(요약)
+- 모든 산술/비트/시프트/비교는 값들을 비트 그룹(SRC1/SRC2/RES)에 투영하고
+  `bit_lut.py`의 LUT(add/sub/and/or/xor/shl/shr)를 사용해 LED에서 직접 계산합니다.
+- 결과는 RES에서 변수로 PACK되며, 플래그(Z/N/V)는 연산 규칙에 따라 갱신됩니다.
+
+예제: 멀티라인 IF/ELSE/END
+
+    # 변수는 VARIABLE_KEYS만 사용 (q, w, e, r, a, s, d, z, x)
+    q = 5
+    w = -3
+    r = 0
+
+    IF q == w THEN
+        r = 1
+    ELSE
+        r = -1
+    END
+
+    IF q > w THEN
+        e = q - w
+    ELSE
+        e = w - q
+    END
+
+주의/제약
+- THEN이 없으면 IF 헤더를 인식하지 못해 블록이 전개되지 않습니다.
+- 자동 라벨 `__IF{n}_*`과 동일한 라벨 이름을 사용자 코드에서 사용하지 마세요(충돌 위험).
+- 비교는 서명 8비트(-128..127) 기준입니다.
+
+참고 위치(핵심 코드)
+- 파서 라인 파싱: src/sim/parser.py: parse_line
+- 블록 전처리: src/sim/parser.py: preprocess_program
+- CPU 실행 루프/연산: src/sim/cpu.py
+- LUT와 비트 연산: src/utils/bit_lut.py
+- LED 메모리 인터페이스: src/sim/data_memory_rgb_visual.py

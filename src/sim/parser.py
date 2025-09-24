@@ -262,3 +262,181 @@ def _is_int_literal(s: str) -> bool:
 
 def _parse_int(s: str) -> int:
     return int(s, 0)
+
+# ---------------- high-level block preprocessing ----------------
+def preprocess_program(lines: List[str]) -> List[str]:
+    """멀티라인 블록(IF/ELSE/END)을 저수준 명령 시퀀스로 전개.
+    - 지원 비교: ==, !=, <, >, <=, >= (signed)
+    - 문법:
+        IF <lhs> <op> <rhs> THEN
+            ... (문장들)
+        [ELSE]
+            ... (문장들)
+        END
+    - 중첩 IF 지원.
+    - 생성 라벨: __IF{n}_ELSE, __IF{n}_END, 필요 시 __IF{n}_V0, __IF{n}_CONT
+    """
+
+    def _is_imm_token(tok: str) -> bool:
+        t = tok.strip()
+        if t.startswith('#'):
+            t = t[1:]
+        return _is_int_literal(t)
+
+    def _parse_if_header(s: str) -> tuple[str, str, str] | None:
+        # s: 원본 라인(대소문자 무관). "IF ... THEN" 형태만 처리
+        up = s.strip()
+        if not up.upper().startswith('IF '):
+            return None
+        idx_then = up.upper().rfind(' THEN')
+        if idx_then == -1:
+            return None
+        cond = up[3:idx_then].strip()  # IF 이후 ~ THEN 이전
+        # 두 글자 연산자 우선 탐색
+        for op in ("==", "!=", "<=", ">="):
+            k = cond.find(op)
+            if k != -1:
+                lhs = cond[:k].strip()
+                rhs = cond[k+len(op):].strip()
+                return lhs, op, rhs
+        # 단일 글자
+        for op in ("<", ">"):
+            k = cond.find(op)
+            if k != -1:
+                lhs = cond[:k].strip()
+                rhs = cond[k+len(op):].strip()
+                return lhs, op, rhs
+        return None
+
+    out: List[str] = []
+    stack: List[dict[str, Any]] = []
+    if_counter = 0
+
+    def _emit_cmp_and_branch_false(lhs: str, op: str, rhs: str, else_label: str, base: str) -> None:
+        # 비교 실행(CMP/CMPI) 후, 조건이 거짓일 때 else_label로 분기하는 시퀀스를 out에 추가
+        is_imm = _is_imm_token(rhs)
+        if is_imm:
+            imm = rhs[1:] if rhs.strip().startswith('#') else rhs.strip()
+            out.append(f"CMPI {lhs}, {imm}")
+        else:
+            out.append(f"CMP {lhs}, {rhs}")
+
+        # 간단 케이스
+        if op == '==':
+            out.append(f"BNE {else_label}")
+            return
+        if op == '!=':
+            out.append(f"BEQ {else_label}")
+            return
+
+        v0 = f"{base}_V0"
+        cont = f"{base}_CONT"
+
+        if op == '<':  # 거짓 = GE (N xor V == 0)
+            out.append(f"BVC {v0}")
+            out.append(f"BMI {else_label}")  # V=1,N=1 -> GE -> 거짓
+            out.append(f"JMP {cont}")
+            out.append(f"{v0}:")
+            out.append(f"BPL {else_label}")  # V=0,N=0 -> GE -> 거짓
+            out.append(f"{cont}:")
+            return
+
+        if op == '>=':  # 거짓 = LT
+            out.append(f"BVC {v0}")
+            out.append(f"BPL {else_label}")  # V=1,N=0 -> LT -> 거짓
+            out.append(f"JMP {cont}")
+            out.append(f"{v0}:")
+            out.append(f"BMI {else_label}")  # V=0,N=1 -> LT -> 거짓
+            out.append(f"{cont}:")
+            return
+
+        if op == '<=':  # 거짓 = GT (Z=0 and N xor V=0)
+            out.append(f"BEQ {cont}")  # Z=1 -> 참 -> 통과
+            out.append(f"BVC {v0}")
+            out.append(f"BMI {else_label}")  # V=1,N=1 -> GE & Z=0 -> GT -> 거짓 분기
+            out.append(f"JMP {cont}")
+            out.append(f"{v0}:")
+            out.append(f"BPL {else_label}")  # V=0,N=0 -> GE & Z=0 -> GT -> 거짓 분기
+            out.append(f"{cont}:")
+            return
+
+        if op == '>':  # 거짓 = LE (Z=1 or LT)
+            out.append(f"BEQ {else_label}")  # Z=1 -> LE -> 거짓 분기
+            out.append(f"BVC {v0}")
+            out.append(f"BPL {else_label}")  # V=1,N=0 -> LT -> 거짓 분기
+            out.append(f"JMP {cont}")
+            out.append(f"{v0}:")
+            out.append(f"BMI {else_label}")  # V=0,N=1 -> LT -> 거짓 분기
+            out.append(f"{cont}:")
+            return
+
+        # 미지원 연산자 안전장치: 거짓으로 간주하여 else로
+        out.append(f"JMP {else_label}")
+
+    i = 0
+    n = len(lines)
+    while i < n:
+        raw = lines[i].rstrip('\n')
+        s = raw.strip()
+        up = s.upper()
+
+        # ELSE 처리
+        if up == 'ELSE' or up == 'ELSE:':
+            if not stack:
+                out.append(raw)
+                i += 1
+                continue
+            frame = stack[-1]
+            if frame.get('has_else', False):
+                out.append(raw)
+                i += 1
+                continue
+            out.append(f"JMP {frame['end_label']}")
+            out.append(f"{frame['else_label']}:")
+            frame['has_else'] = True
+            i += 1
+            continue
+
+        # END/ENDIF 처리
+        if up == 'END' or up == 'END IF' or up == 'ENDIF':
+            if not stack:
+                out.append(raw)
+                i += 1
+                continue
+            frame = stack.pop()
+            if not frame.get('has_else', False):
+                out.append(f"{frame['else_label']}:")
+            out.append(f"{frame['end_label']}:")
+            i += 1
+            continue
+
+        # IF ... THEN 처리
+        hdr = _parse_if_header(s)
+        if hdr is not None:
+            lhs, op, rhs = hdr
+            base = f"__IF{if_counter}"
+            else_label = f"{base}_ELSE"
+            end_label = f"{base}_END"
+            _emit_cmp_and_branch_false(lhs, op, rhs, else_label, base)
+            stack.append({
+                'base': base,
+                'else_label': else_label,
+                'end_label': end_label,
+                'has_else': False,
+            })
+            if_counter += 1
+            i += 1
+            continue
+
+        # 일반 라인은 그대로 전달
+        out.append(raw)
+        i += 1
+
+    # 미닫힌 블록 정리(안전장치)
+    while stack:
+        frame = stack.pop()
+        if not frame.get('has_else', False):
+            out.append(f"{frame['else_label']}:")
+        out.append(f"{frame['end_label']}:")
+
+    return out

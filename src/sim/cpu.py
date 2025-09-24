@@ -2,12 +2,13 @@
 from typing import Dict, Any, List, Tuple
 
 from utils.keyboard_presets import FLAG_LABELS, BINARY_COLORS
+from utils.stage_indicator import post_stage, clear_stages
 
 from sim.pc import PC
 from sim.ir import IR
 from sim.data_memory_rgb_visual import DataMemoryRGBVisual
 from sim.program_memory import ProgramMemory
-from sim.parser import parse_line
+from sim.parser import parse_line, preprocess_program
 
 from utils.bit_lut import (
     add8_via_lut, sub8_via_lut, and8_via_lut, or8_via_lut, xor8_via_lut,
@@ -91,7 +92,11 @@ class CPU:
 
     # ---------- 외부 API ----------
     def load_program(self, lines: List[str]) -> None:
-        self.prog.load_program(lines)
+        try:
+            expanded = preprocess_program(lines)
+        except Exception:
+            expanded = lines
+        self.prog.load_program(expanded)
         self.pc.reset()
         self.halted = False
         self.ir.clear()
@@ -102,6 +107,12 @@ class CPU:
         # 초기 플래그 상태를 LED에 1회 반영(Off 상태라도 바로 보이게)
         try:
             self._sync_flag_leds()
+        except Exception:
+            pass
+
+        # Clear control-stage indicators at program load
+        try:
+            clear_stages()
         except Exception:
             pass
 
@@ -124,6 +135,11 @@ class CPU:
 
         ops = parse_line(line)
         for op, args in ops:
+            # 간단 해법: 각 마이크로-옵 시작 전에 FETCH를 명시적으로 표시
+            try:
+                post_stage("FETCH")
+            except Exception:
+                pass
             self.ir.decoded = (op, args)
             self._on_decode((op, args))
             self._println(
@@ -174,6 +190,11 @@ class CPU:
     def run(self) -> None:
         self._println("\n[RUN] Starting execution...")
         while self.step():
+            pass
+        # 실행 종료 즉시 단계 표시 소등(WRITEBACK 포함)
+        try:
+            clear_stages()
+        except Exception:
             pass
         self._println("[RUN] Execution finished.\n")
 
@@ -649,20 +670,45 @@ class CPU:
 
     # ---------- 콘솔 훅 ----------
     def _on_fetch(self, text: str) -> None:
+        # Stage: FETCH (비동기 표시)
+        try:
+            post_stage("FETCH")
+        except Exception:
+            pass
         self._println(f"[FETCH] PC={self.pc.value:02d}  line='{text}'")
 
     def _on_decode(self, decoded: Tuple[str, tuple[Any, ...]]) -> None:
         op, args = decoded
+        # Stage: DECODE (비동기 표시)
+        try:
+            post_stage("DECODE")
+        except Exception:
+            pass
         self._println(f"[DECODE] {op} {args}")
 
     def _on_execute(self, desc: str) -> None:
+        # Stage: EXECUTE (비동기 표시)
+        try:
+            post_stage("EXECUTE")
+        except Exception:
+            pass
         self._println(f"[EXEC]   {desc}")
 
     def _on_writeback(self, changes: Dict[str, int]) -> None:
         if changes:
             ch = ", ".join(f"{k}={v:4d}" for k, v in changes.items())
+            # Stage: WRITEBACK (비동기 표시)
+            try:
+                post_stage("WRITEBACK")
+            except Exception:
+                pass
             self._println(f"[WB]     {ch}")
         else:
+            # Stage: WRITEBACK (비동기 표시: 변경 없어도 동일)
+            try:
+                post_stage("WRITEBACK")
+            except Exception:
+                pass
             self._println("[WB]     (no changes)")
 
     def _on_pc_advance(self, old: int, new: int) -> None:
@@ -670,6 +716,11 @@ class CPU:
 
     def _on_halt(self) -> None:
         self._println("[HALT]   Program finished or PC out of range.")
+        # Clear indicators on halt for a clean stop
+        try:
+            clear_stages()
+        except Exception:
+            pass
 
     def _println(self, s: str) -> None:
         if self.debug:

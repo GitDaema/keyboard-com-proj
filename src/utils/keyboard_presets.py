@@ -63,5 +63,21 @@ BINARY_COLORS.update({
     "left_alt":  ((255, 200, 0), (80, 80, 80)),  # V
 })
 
+# 산술 단계 표시용(플래그처럼 사용): Cin/Bin, Sum/Diff, Cout/Bout
+# - backslash:  Cin/Bin (시작 캐리/차용)
+# - enter:     Sum/Diff (해당 비트의 합/차)
+# - right_shift: Cout/Bout (다음 비트로 전달 캐리/차용)
+STEP_LABELS = {
+    "CIN":  "backslash",
+    "SUM":  "enter",
+    "COUT": "right_shift",
+}
+
+BINARY_COLORS.update({
+    STEP_LABELS["CIN"]:  ((255, 255, 0), (60, 60, 60)),   # 노랑
+    STEP_LABELS["SUM"]:  ((255, 255, 255), (60, 60, 60)), # 흰색
+    STEP_LABELS["COUT"]: ((255, 0, 255), (60, 60, 60)),   # 자홍
+})
+
 # 사용자가 변수로 사용한다고 지정한 키 목록
 VARIABLE_KEYS = {'q', 'w', 'e', 'r', 'a', 's', 'd', 'z', 'x'}

@@ -11,6 +11,9 @@ PINK        = RGBColor(255, 105, 180)
 WHITE       = RGBColor(255, 255, 255)
 BLACK       = RGBColor(  0,   0,   0)
 
+# Unique bright cyan for control-stage indicator (not used elsewhere)
+CYAN        = RGBColor(  0, 255, 255)
+
 HEX_COLORS = {
     0x0: RGBColor(0, 0, 0),          # Black
 
