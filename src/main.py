@@ -16,6 +16,7 @@ from utils.bitgroups import set_group_value, get_group_value, copy_group_value
 import utils.keyboard_presets as kp
 import utils.color_presets as cp
 from sim.cpu import CPU
+from utils.run_pause_indicator import run_off
 from sim.data_memory_rgb_visual import DataMemoryRGBVisual
 
 def rgb_routine(label: str):
@@ -36,6 +37,11 @@ def main():
         connect()
         time.sleep(0.6)
         init_all_keys()
+        # Show PAUSE while waiting to start
+        try:
+            run_off()
+        except Exception:
+            pass
         print("[INFO] All keys ready. Press Enter to start.")
         input()
 

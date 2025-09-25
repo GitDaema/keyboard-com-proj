@@ -3,6 +3,7 @@ from typing import Dict, Any, List, Tuple
 
 from utils.keyboard_presets import FLAG_LABELS, BINARY_COLORS
 from utils.stage_indicator import post_stage, clear_stages
+from utils.run_pause_indicator import run_on, run_off
 
 from sim.pc import PC
 from sim.ir import IR
@@ -172,14 +173,39 @@ class CPU:
             return
         if self._continue_run:
             return
+        # Entering pause state: turn off stage indicators and show PAUSE
+        try:
+            clear_stages()
+        except Exception:
+            pass
+        try:
+            run_off()
+        except Exception:
+            pass
         try:
             s = input("[step] Enter=next | c=continue | q=quit > ").strip().lower()
         except EOFError:
             s = ""
         if s == "c":
             self._continue_run = True
+            # Resume continuous run: show RUN (on)
+            try:
+                run_on()
+            except Exception:
+                pass
         elif s == "q":
             self.halted = True
+            # Remain paused on quit
+            try:
+                run_off()
+            except Exception:
+                pass
+        else:
+            # Single-step resume: turn RUN on; next pause will turn it off again
+            try:
+                run_on()
+            except Exception:
+                pass
 
     def _sync_flag_leds(self) -> None:
         """현재 Z/N/V 값을 지정된 키 LED에 반영"""
@@ -189,6 +215,11 @@ class CPU:
 
     def run(self) -> None:
         self._println("\n[RUN] Starting execution...")
+        # Show RUN when entering the run loop
+        try:
+            run_on()
+        except Exception:
+            pass
         while self.step():
             pass
         # 실행 종료 즉시 단계 표시 소등(WRITEBACK 포함)
@@ -197,6 +228,11 @@ class CPU:
         except Exception:
             pass
         self._println("[RUN] Execution finished.\n")
+        # Ensure indicator shows PAUSE at the end
+        try:
+            run_off()
+        except Exception:
+            pass
 
     def _group_labels(self, grp: str):
         g = grp.upper()
@@ -719,6 +755,11 @@ class CPU:
         # Clear indicators on halt for a clean stop
         try:
             clear_stages()
+        except Exception:
+            pass
+        # Ensure PAUSE on HALT
+        try:
+            run_off()
         except Exception:
             pass
 
