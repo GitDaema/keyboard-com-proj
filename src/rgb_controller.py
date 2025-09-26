@@ -14,10 +14,15 @@ km: Optional[RGBLabelController] = None
 
 # --- 내부 유틸 ---
 
-def _refresh_device_leds():
-    """장치의 최신 LED 상태를 갱신한다."""
+def _refresh_device_leds(dev=None):
+    """장치의 최신 LED 상태를 갱신한다.
+    - 인자로 장치 객체가 주어지면 해당 객체를 새로고침
+    - 없으면 글로벌 kb를 새로고침
+    """
+    target = dev or kb
     try:
-        kb.refresh()
+        if target is not None:
+            target.refresh()
     except Exception:
         pass
 
@@ -29,7 +34,7 @@ def safe_set_direct_and_sync(kb):
         pass
     time.sleep(0.15)
 
-    _refresh_device_leds()
+    _refresh_device_leds(kb)
 
     try:
         kb.set_colors([RGBColor(0, 0, 0)] * len(kb.leds))
@@ -174,7 +179,7 @@ def set_labels_atomic(label_to_color: Dict[str, RGBColor]) -> bool:
             pass
 
         try:
-            _refresh_device_leds()
+            _refresh_device_leds(device)
         except Exception:
             pass
 

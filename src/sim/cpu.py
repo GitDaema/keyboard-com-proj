@@ -3,6 +3,7 @@ from typing import Dict, Any, List, Tuple
 
 from utils.keyboard_presets import FLAG_LABELS, BINARY_COLORS
 from utils.stage_indicator import post_stage, clear_stages
+from utils.ir_indicator import update_from_decoded, clear_ir, encode_from_source_line, set_ir
 from utils.run_pause_indicator import run_on, run_off
 
 from sim.pc import PC
@@ -84,8 +85,8 @@ class CPU:
         self.halted = False
         self.debug = debug
 
-        # 플래그: Zero / Negative / oVerflow
-        self.flags: Dict[str, int] = {"Z": 0, "N": 0, "V": 0}
+        # 플래그: Zero / Negative / oVerflow / Carry
+        self.flags: Dict[str, int] = {"Z": 0, "N": 0, "V": 0, "C": 0}
         self._pc_overridden: bool = False
 
         self.interactive = interactive                         # ← 스텝 실행 플래그
@@ -104,6 +105,7 @@ class CPU:
         self.flags["Z"] = 0
         self.flags["N"] = 0
         self.flags["V"] = 0
+        self.flags["C"] = 0
 
         # 초기 플래그 상태를 LED에 1회 반영(Off 상태라도 바로 보이게)
         try:
@@ -114,6 +116,12 @@ class CPU:
         # Clear control-stage indicators at program load
         try:
             clear_stages()
+        except Exception:
+            pass
+
+        # Clear IR visualization
+        try:
+            clear_ir()
         except Exception:
             pass
 
@@ -382,6 +390,8 @@ class CPU:
 
             inputs_same_sign = _sign_bit(a) == _sign_bit(b)
             self.flags["V"] = 1 if inputs_same_sign and (_sign_bit(a) != _sign_bit(v)) else 0
+            # Carry: unsigned carry out
+            self.flags["C"] = 1 if (_to_u8(a) + _to_u8(b)) > 0xFF else 0
             _set_zn_from_val(self.flags, v)
             self._on_execute(
                 f"ADDI {dst}, #{imm} ; via LUT {dst_name}:{a}+{b}->{v} | Z={self.flags['Z']} N={self.flags['N']} V={self.flags['V']}"
@@ -406,6 +416,8 @@ class CPU:
 
             inputs_same_sign = _sign_bit(a) == _sign_bit(b)
             self.flags["V"] = 1 if inputs_same_sign and (_sign_bit(a) != _sign_bit(v)) else 0
+            # Carry: unsigned carry out
+            self.flags["C"] = 1 if (_to_u8(a) + _to_u8(b)) > 0xFF else 0
             _set_zn_from_val(self.flags, v)
             self._on_execute(
                 f"ADD  {dst}, {src} ; via LUT {dst_name}:{a}+{b}->{v} | Z={self.flags['Z']} N={self.flags['N']} V={self.flags['V']}"
@@ -414,7 +426,18 @@ class CPU:
             return ch
 
         if op == "ADD8":
+            # Perform addition via LUT and update flags like ADD
+            a_u8 = self._read_u8_from_group("SRC1")
+            b_u8 = self._read_u8_from_group("SRC2")
             add8_via_lut(self.mem, src1=SRC1, src2=SRC2, dst=RES, lsb_first=False)
+            res_u8 = self._read_u8_from_group("RES")
+            v = res_u8 if res_u8 < 128 else res_u8 - 256
+            # Signed overflow: inputs same sign and result sign differs from a
+            inputs_same_sign = (1 if (a_u8 & 0x80) else 0) == (1 if (b_u8 & 0x80) else 0)
+            self.flags["V"] = 1 if inputs_same_sign and ((1 if (a_u8 & 0x80) else 0) != (1 if (res_u8 & 0x80) else 0)) else 0
+            # Unsigned carry out
+            self.flags["C"] = 1 if (a_u8 + b_u8) > 0xFF else 0
+            _set_zn_from_val(self.flags, v)
             self._on_execute("ADD8 (via LUT) ; RES ← SRC1 + SRC2")
             return ch
 
@@ -435,6 +458,8 @@ class CPU:
 
             inputs_diff_sign = _sign_bit(a) != _sign_bit(b)
             self.flags["V"] = 1 if inputs_diff_sign and (_sign_bit(a) != _sign_bit(v)) else 0
+            # Carry as 'no borrow' for subtraction
+            self.flags["C"] = 1 if _to_u8(a) >= _to_u8(b) else 0
             _set_zn_from_val(self.flags, v)
             self._on_execute(f"SUBI {dst}, #{imm} ; via LUT {dst_name}:{a}-{b}→{v} | Z={self.flags['Z']} N={self.flags['N']} V={self.flags['V']}")
             ch[dst_name] = v
@@ -457,13 +482,26 @@ class CPU:
 
             inputs_diff_sign = _sign_bit(a) != _sign_bit(b)
             self.flags["V"] = 1 if inputs_diff_sign and (_sign_bit(a) != _sign_bit(v)) else 0
+            # Carry as 'no borrow' for subtraction
+            self.flags["C"] = 1 if _to_u8(a) >= _to_u8(b) else 0
             _set_zn_from_val(self.flags, v)
             self._on_execute(f"SUB  {dst}, {src} ; via LUT {dst_name}:{a}-{b}→{v} | Z={self.flags['Z']} N={self.flags['N']} V={self.flags['V']}")
             ch[dst_name] = v
             return ch
 
         if op == "SUB8":
+            # Perform subtraction via LUT and update flags like SUB
+            a_u8 = self._read_u8_from_group("SRC1")
+            b_u8 = self._read_u8_from_group("SRC2")
             sub8_via_lut(self.mem, src1=SRC1, src2=SRC2, dst=RES, lsb_first=False)
+            res_u8 = self._read_u8_from_group("RES")
+            v = res_u8 if res_u8 < 128 else res_u8 - 256
+            # Signed overflow on subtraction: inputs different sign and result sign differs from a
+            inputs_diff_sign = ((a_u8 ^ b_u8) & 0x80) != 0
+            self.flags["V"] = 1 if inputs_diff_sign and (((a_u8 ^ res_u8) & 0x80) != 0) else 0
+            # Carry as 'no borrow'
+            self.flags["C"] = 1 if a_u8 >= b_u8 else 0
+            _set_zn_from_val(self.flags, v)
             self._on_execute("SUB8 (via LUT) ; RES ← SRC1 - SRC2")
             return ch
 
@@ -514,6 +552,8 @@ class CPU:
             res_u8 = self._read_u8_from_group("RES")
             v = res_u8 if res_u8 < 128 else res_u8 - 256
             
+            # Carry out from MSB before shift
+            self.flags["C"] = 1 if (_to_u8(a) & 0x80) else 0
             # SHL overflow: 최상위 비트 변화 여부로 판단
             ov = 1 if (_sign_bit(a) != _sign_bit(v)) else 0
             self.mem.set(dst_name, v)
@@ -535,6 +575,8 @@ class CPU:
             v = res_u8 if res_u8 < 128 else res_u8 - 256
             self.mem.set(dst_name, v)
 
+            # Carry out from LSB
+            self.flags["C"] = 1 if (_to_u8(a) & 0x01) else 0
             self.flags["V"] = 0 # ASR은 오버플로우 없음
             _set_zn_from_val(self.flags, v)
             self._on_execute(f"SHR  {dst} ; via LUT {a:4d}>>1 -> {v:4d} | V=0 Z={self.flags['Z']} N={self.flags['N']}")
@@ -556,6 +598,8 @@ class CPU:
 
             inputs_diff_sign = _sign_bit(a) != _sign_bit(b)
             self.flags["V"] = 1 if inputs_diff_sign and (_sign_bit(a) != _sign_bit(v)) else 0
+            # Carry as 'no borrow' like SUB
+            self.flags["C"] = 1 if _to_u8(a) >= _to_u8(b) else 0
             _set_zn_from_val(self.flags, v)
             
             b_str = f"#{b}" if op == "CMPI" else str(b_arg)
@@ -711,7 +755,26 @@ class CPU:
             post_stage("FETCH")
         except Exception:
             pass
-        self._println(f"[FETCH] PC={self.pc.value:02d}  line='{text}'")
+        # Try to render approximate machine encoding as 2-byte binary (xxxx xxxx xxxx xxxx)
+        enc_bits = ""
+        try:
+            enc = encode_from_source_line(text)
+            if enc is not None:
+                op4, dst4, arg8 = enc
+                b0 = ((op4 & 0xF) << 4) | (dst4 & 0xF)
+                b1 = arg8 & 0xFF
+                bits16 = f"{(b0<<8)|b1:016b}"
+                grouped = " ".join(bits16[i:i+4] for i in range(0, 16, 4))
+                enc_bits = f" | ENC {grouped}"
+                # Also set IR visualization here (avoid re-parsing later)
+                try:
+                    set_ir(op4, dst4, arg8)
+                except Exception:
+                    pass
+        except Exception:
+            enc_bits = ""
+        self._println(f"[FETCH] PC={self.pc.value:02d}  line='{text}'{enc_bits}")
+        # IR already updated above
 
     def _on_decode(self, decoded: Tuple[str, tuple[Any, ...]]) -> None:
         op, args = decoded
@@ -721,6 +784,7 @@ class CPU:
         except Exception:
             pass
         self._println(f"[DECODE] {op} {args}")
+        # IR는 FETCH 단계에서 고수준 라인 기준으로 이미 표시함
 
     def _on_execute(self, desc: str) -> None:
         # Stage: EXECUTE (비동기 표시)
@@ -755,6 +819,11 @@ class CPU:
         # Clear indicators on halt for a clean stop
         try:
             clear_stages()
+        except Exception:
+            pass
+        # IR off on halt
+        try:
+            clear_ir()
         except Exception:
             pass
         # Ensure PAUSE on HALT

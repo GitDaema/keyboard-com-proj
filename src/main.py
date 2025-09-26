@@ -63,16 +63,14 @@ def main():
         #   {'q','w','e','r','a','s','d','z','x'}
         program = [
             "start:",
-            # 초기값 설정
-            "q = -16",      # 허용 변수
-            "w = -8",     # 허용 변수
-            "r = -4",      # 허용 변수
-            "a = 0",      # 허용 변수
-            "s = 4",
-            "z = 8",
-            
-            "q = q + w",
-            "w = w - r",
+            # Carry(C) 확인 예제
+            # 1) ADD: -1(0xFF) + 1 -> 0x00, C=1 (unsigned carry-out)
+            "a = -1",
+            "a = a + 1",
+
+            # 2) SUB: 0 - 1 -> borrow 발생, C=0 (no-borrow가 아니므로 0)
+            "x = 0",
+            "x = x - 1",
 
             "HALT"
         ]

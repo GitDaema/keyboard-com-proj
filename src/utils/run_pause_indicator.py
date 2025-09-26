@@ -1,12 +1,15 @@
 from openrgb.utils import RGBColor
 from rgb_controller import set_key_color
-import utils.color_presets as cp
+from utils.keyboard_presets import (
+    RUN_PAUSE_LABEL,
+    RUN_PAUSE_ON,
+    RUN_PAUSE_OFF,
+)
 
-# Single-key RUN/PAUSE indicator on `grave` key
-# ON = RUN (green), OFF = PAUSE (black)
-_LABEL = "grave"
-_RUN_ON: RGBColor = cp.GREEN
-_RUN_OFF: RGBColor = cp.BLACK
+# Single-key RUN/PAUSE indicator using presets from keyboard_presets
+_LABEL = RUN_PAUSE_LABEL
+_RUN_ON: RGBColor = RGBColor(*RUN_PAUSE_ON)
+_RUN_OFF: RGBColor = RGBColor(*RUN_PAUSE_OFF)
 
 def run_on() -> None:
     try:
@@ -27,4 +30,3 @@ def set_run(is_running: bool) -> None:
         run_on()
     else:
         run_off()
-
