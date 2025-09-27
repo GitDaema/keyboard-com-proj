@@ -3,8 +3,9 @@ from typing import Dict, Any, List, Tuple
 
 from utils.keyboard_presets import FLAG_LABELS, BINARY_COLORS
 from utils.stage_indicator import post_stage, clear_stages
-from utils.ir_indicator import update_from_decoded, clear_ir, encode_from_source_line, set_ir
+from utils.ir_indicator import update_from_decoded, clear_ir, encode_from_source_line_fixed, set_ir
 from utils.run_pause_indicator import run_on, run_off
+from utils.pc_indicator import update_pc, clear_pc
 
 from sim.pc import PC
 from sim.ir import IR
@@ -127,10 +128,19 @@ class CPU:
 
         self._continue_run = False
 
+        # Initialize PC indicator to OFF (dark gray)
+        try:
+            clear_pc()
+        except Exception:
+            pass
+
     def step(self) -> bool:
         if self.halted:
             self._on_halt()
             return False
+
+        # Capture PC at the start of the step for accurate logging
+        start_pc = self.pc.value
 
         line = self.prog.fetch(self.pc.value)
         if line is None:
@@ -164,12 +174,12 @@ class CPU:
             if self.halted or self._pc_overridden:
                 break
 
-        old = self.pc.value
+        # Report PC transition based on the start-of-step PC
         if not self._pc_overridden:
             self.pc.increment(1)
-            self._on_pc_advance(old, self.pc.value)
+            self._on_pc_advance(start_pc, self.pc.value)
         else:
-            self._on_pc_advance(old, self.pc.value)
+            self._on_pc_advance(start_pc, self.pc.value)
 
         self.ir.clear()
         return not self.halted
@@ -755,10 +765,15 @@ class CPU:
             post_stage("FETCH")
         except Exception:
             pass
+        # Update PC indicator for current instruction address
+        try:
+            update_pc(self.pc.value)
+        except Exception:
+            pass
         # Try to render approximate machine encoding as 2-byte binary (xxxx xxxx xxxx xxxx)
         enc_bits = ""
         try:
-            enc = encode_from_source_line(text)
+            enc = encode_from_source_line_fixed(text)
             if enc is not None:
                 op4, dst4, arg8 = enc
                 b0 = ((op4 & 0xF) << 4) | (dst4 & 0xF)
@@ -824,6 +839,11 @@ class CPU:
         # IR off on halt
         try:
             clear_ir()
+        except Exception:
+            pass
+        # Turn off PC indicators on halt
+        try:
+            clear_pc()
         except Exception:
             pass
         # Ensure PAUSE on HALT

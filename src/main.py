@@ -62,17 +62,38 @@ def main():
         # - 변수 이름은 utils/keyboard_presets.py의 VARIABLE_KEYS만 사용하세요:
         #   {'q','w','e','r','a','s','d','z','x'}
         program = [
+            # 데모 프로그램: 분기/루프 포함 10줄 이상
+            # 목표:
+            # 1) a의 절대값 계산 (IF/THEN/ELSE/END 사용)
+            # 2) a가 x와 같은지 비교하여 d에 1/0 저장
+            # 3) a를 0이 될 때까지 감소시키는 루프 (레이블+분기)
+
             "start:",
-            # Carry(C) 확인 예제
-            # 1) ADD: -1(0xFF) + 1 -> 0x00, C=1 (unsigned carry-out)
-            "a = -1",
-            "a = a + 1",
+            "a = -7",          # 초기값
+            "x = 5",           # 비교 대상
+            "s = 0",           # 임시/플래그 용도
 
-            # 2) SUB: 0 - 1 -> borrow 발생, C=0 (no-borrow가 아니므로 0)
-            "x = 0",
-            "x = x - 1",
+            # a < 0 이면 a = -a (절대값)
+            "IF a < #0 THEN",
+            "    a = 0 - a",
+            "END",
 
-            "HALT"
+            # a == x 이면 d=1, 아니면 d=0
+            "IF a == x THEN",
+            "    d = 1",
+            "ELSE",
+            "    d = 0",
+            "END",
+
+            # a를 0이 될 때까지 1씩 감소시키는 루프
+            "loop:",
+            "CMPI a, #0",
+            "BEQ done",
+            "a = a - 1",
+            "JMP loop",
+
+            "done:",
+            "HALT",
         ]
 
         cpu.load_program(program)

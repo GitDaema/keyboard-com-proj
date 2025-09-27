@@ -2,8 +2,11 @@ from openrgb.utils import RGBColor
 
 RED         = RGBColor(255,  0,  0)
 DARK_RED    = RGBColor(150, 0, 0)
-ORANGE      = RGBColor(255, 149,   5)
+ORANGE      = RGBColor(255, 180,   0)
+ORANGE_BRIGHT = RGBColor(255, 210,  20)
+DARK_GRAY   = RGBColor( 60,  60,  60)
 YELLOW      = RGBColor(255, 234,   0)
+BRIGHT_YELLOW = RGBColor(255, 255, 0)
 GREEN       = RGBColor(  0, 255,  0)
 BLUE        = RGBColor(  0, 102, 204)
 PURPLE      = RGBColor(170,   0, 170)

@@ -331,6 +331,32 @@ def preprocess_program(lines: List[str]) -> List[str]:
         else:
             out.append(f"CMP {lhs}, {rhs}")
 
+        # Fast-path for comparisons against 0 using N/Z only
+        try:
+            if is_imm:
+                v0 = _parse_int(imm)
+                if op == '<' and v0 == 0:
+                    # false when a >= 0 -> N=0
+                    out.append(f"BPL {else_label}")
+                    return
+                if op == '>=' and v0 == 0:
+                    # false when a < 0 -> N=1
+                    out.append(f"BMI {else_label}")
+                    return
+                if op == '<=' and v0 == 0:
+                    # false when a > 0 -> Z=0 and N=0
+                    out.append(f"BEQ {base}_LE0_TRUE")  # Z=1 -> true path
+                    out.append(f"BPL {else_label}")      # Z=0 & N=0 -> false
+                    out.append(f"{base}_LE0_TRUE:")
+                    return
+                if op == '>' and v0 == 0:
+                    # false when a <= 0 -> Z=1 or N=1
+                    out.append(f"BMI {else_label}")      # N=1 -> false
+                    out.append(f"BEQ {else_label}")      # Z=1 -> false
+                    return
+        except Exception:
+            pass
+
         # 간단 케이스
         if op == '==':
             out.append(f"BNE {else_label}")

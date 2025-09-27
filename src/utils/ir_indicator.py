@@ -2,7 +2,7 @@ from typing import Dict, Tuple, Any
 from openrgb.utils import RGBColor
 from rgb_controller import set_labels_atomic, set_key_color
 from utils.keyboard_presets import (
-    IR12, IR_OP_2BIT, IR_DST_2BIT, IR_ARG_1BIT,
+    IR12, IR_OP_1BIT, IR_DST_1BIT, IR_ARG_2BIT,
     IR_ONOFF, IR_4STATE, VAR_TO_ID,
 )
 from sim.parser import parse_line  # for high-level source interpretation
@@ -13,9 +13,12 @@ def _clamp8(x: int) -> int:
 
 
 def _pair_colors(role: str, val2: int) -> RGBColor:
-    colors = IR_4STATE[role]
+    # Fallback palette ensures availability for 'ARG' role
+    palette = IR_4STATE.get(role) or IR_4STATE.get("OP") or [
+        (255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 255)
+    ]
     v = int(val2) & 0x03
-    r, g, b = colors[v]
+    r, g, b = palette[v]
     return RGBColor(r, g, b)
 
 
@@ -34,6 +37,33 @@ def set_ir(op_nibble: int, dst_nibble: int, arg_byte: int) -> None:
     opn = int(op_nibble) & 0xF
     dst = int(dst_nibble) & 0xF
     arg = _clamp8(arg_byte)
+
+    # Unified scheme: override legacy mapping with binary OP/DST and 4-state ARG
+    payload: Dict[str, RGBColor] = {}
+
+    # OP bits (MSB..LSB) -> F1..F4
+    for i, lab in enumerate(IR_OP_1BIT):
+        bit = (opn >> (3 - i)) & 1
+        payload[lab] = _bit_color("OP", bit)
+
+    # DST bits (MSB..LSB) -> F5..F8
+    for i, lab in enumerate(IR_DST_1BIT):
+        bit = (dst >> (3 - i)) & 1
+        payload[lab] = _bit_color("DST", bit)
+
+    # ARG pairs -> F9..F12 with 4-state colors
+    for i, lab in enumerate(IR_ARG_2BIT):
+        val2 = (arg >> (6 - 2*i)) & 0x3
+        payload[lab] = _pair_colors("ARG", val2)
+
+    ok = set_labels_atomic(payload)
+    if not ok:
+        for k, c in payload.items():
+            try:
+                set_key_color(k, c)
+            except Exception:
+                pass
+    return
 
     payload: Dict[str, RGBColor] = {}
 
@@ -121,7 +151,14 @@ def encode_from_decoded(decoded: Tuple[str, tuple[Any, ...]]) -> Tuple[int, int,
             dst4 = _var_id(args[0])
         except Exception:
             dst4 = 0
-        arg8 = 0
+        if op_u == "MOV":
+            # For MOV, also encode source var ID into ARG for display
+            try:
+                arg8 = _var_id(args[1])
+            except Exception:
+                arg8 = 0
+        else:
+            arg8 = 0
     elif op_u in ("MOVI",):
         try:
             dst4 = _var_id(args[0])
@@ -130,8 +167,8 @@ def encode_from_decoded(decoded: Tuple[str, tuple[Any, ...]]) -> Tuple[int, int,
             dst4 = 0
             arg8 = 0
     elif op_u in _BR_COND:
-        dst4 = _BR_COND[op_u] & 0xF
-        arg8 = 0
+        dst4 = 0
+        arg8 = ((int(_BR_COND[op_u]) & 0x3) << 6) & 0xFF
     else:
         dst4 = 0
         arg8 = 0
@@ -144,10 +181,26 @@ def update_from_decoded(decoded: Tuple[str, tuple[Any, ...]]) -> None:
 
 
 def clear_ir() -> None:
-    for lab in IR12:
+    # Clear OP/DST bits to OFF and ARG pairs to black
+    try:
+        off_op = IR_ONOFF.get("OP", ((255,255,255),(0,0,0)))[1]
+        off_dst = IR_ONOFF.get("DST", ((255,255,255),(0,0,0)))[1]
+    except Exception:
+        off_op = (0,0,0)
+        off_dst = (0,0,0)
+    for lab in IR_OP_1BIT:
         try:
-            off = IR_ONOFF["ARG"][1]
-            set_key_color(lab, RGBColor(*off))
+            set_key_color(lab, RGBColor(*off_op))
+        except Exception:
+            pass
+    for lab in IR_DST_1BIT:
+        try:
+            set_key_color(lab, RGBColor(*off_dst))
+        except Exception:
+            pass
+    for lab in IR_ARG_2BIT:
+        try:
+            set_key_color(lab, RGBColor(0,0,0))
         except Exception:
             pass
 
@@ -227,3 +280,48 @@ def update_from_source_line(line: str) -> None:
         return
     op4, dst4, arg8 = enc
     set_ir(op4, dst4, arg8)
+
+
+# Fixed parser for high-level source -> approximate machine tuple
+# Handles negative immediates like '-1' correctly by prioritizing
+# immediate detection before '+'/'-' expression handling.
+def encode_from_source_line_fixed(line: str) -> Tuple[int, int, int] | None:
+    s = (line or "").strip()
+    if not s or s.startswith('#'):
+        return None
+    if s.endswith(':') and (':' not in s[:-1]):
+        return None
+
+    try:
+        ops = parse_line(s)
+    except Exception:
+        ops = []
+
+    for op, args in ops:
+        if str(op).upper() in _MACHINE_OPS:
+            return encode_from_decoded((op, args))
+
+    if '=' in s:
+        left, right = [t.strip() for t in s.split('=', 1)]
+        # Detect immediates first (supports negatives and '#-3')
+        if _is_int_literal(right):
+            return encode_from_decoded(("MOVI", (left, _to_int(right))))
+        # '+' expression
+        if '+' in right:
+            a, b = [t.strip() for t in right.split('+', 1)]
+            if left == a and _is_int_literal(b):
+                return encode_from_decoded(("ADDI", (left, _to_int(b))))
+            if left == b and _is_int_literal(a):
+                return encode_from_decoded(("ADDI", (left, _to_int(a))))
+            return encode_from_decoded(("ADD", (left, b)))
+        # '-' expression (true subtraction)
+        if '-' in right:
+            a, b = [t.strip() for t in right.split('-', 1)]
+            if left == a and _is_int_literal(b):
+                return encode_from_decoded(("SUBI", (left, _to_int(b))))
+            if left == a and not _is_int_literal(b):
+                return encode_from_decoded(("SUB", (left, b)))
+            return encode_from_decoded(("MOV", (left, a)))
+        # Simple move x = y
+        return encode_from_decoded(("MOV", (left, right)))
+    return encode_from_decoded(("NOP", ()))

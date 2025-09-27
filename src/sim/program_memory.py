@@ -1,51 +1,65 @@
-# sim/program_memory.py
-from typing import Optional, List, Dict
-from sim.parser import parse_line  # ← 추가
-from typing import Tuple, Any
+from typing import Optional, List, Dict, Tuple, Any
+from sim.parser import parse_line
 
 Op = Tuple[str, tuple[Any, ...]]
 
+
 class ProgramMemory:
     """
-    소스 코드 라인 단위로 보관/Fetch + 라벨 테이블
-    - 라벨 형식: "label:" (행의 처음~끝까지 콜론으로 끝나면 라벨로 간주)
-    - 라벨은 그 라인의 인덱스를 가리킴(그 라인은 보통 NOP로 파싱되어 한 사이클 소비됨)
-      * 최소 구현을 위해 라벨-전용 라인을 스킵하지 않고 남겨둠(간단/안전)
+    Program storage with label addressing that does not consume
+    addresses for label-only lines. Labels map to the next executable
+    line index.
     """
+
     def __init__(self) -> None:
+        # Raw source lines as loaded (may include labels)
         self.lines: List[str] = []
+        # Executable lines with label-only lines removed
+        self.exec_lines: List[str] = []
+        # Label name -> executable address (index into exec_lines)
         self.labels: Dict[str, int] = {}
-        self._ops_cache: Dict[int, List[Op]] = {}  # ← 추가
+        # Cache for parsed ops per executable line index
+        self._ops_cache: Dict[int, List[Op]] = {}
 
     def load_program(self, lines: List[str]) -> None:
-        self.lines = [ln.rstrip() for ln in lines]
-        self._build_label_map()
-        self._ops_cache.clear()  # ← 추가: 프로그램 로드시 캐시 초기화
+        self.lines = [ln.rstrip("\n\r") for ln in lines]
+        self._rebuild_compacted()
+        self._ops_cache.clear()
 
     def fetch(self, pc: int) -> Optional[str]:
-        if 0 <= pc < len(self.lines):
-            return self.lines[pc]
+        if 0 <= pc < len(self.exec_lines):
+            return self.exec_lines[pc]
         return None
 
     def size(self) -> int:
-        return len(self.lines)
+        return len(self.exec_lines)
 
     def get_label_addr(self, name: str) -> Optional[int]:
         return self.labels.get(name)
 
     def get_ops(self, pc: int) -> List[Op]:
-        """해당 라인의 파싱 결과를 캐시하여 반환"""
+        """Return parsed ops for the executable line at pc (cached)."""
         if pc not in self._ops_cache:
-            line = self.fetch(pc)
-            self._ops_cache[pc] = parse_line(line if line is not None else "")
+            line = self.fetch(pc) or ""
+            self._ops_cache[pc] = parse_line(line)
         return self._ops_cache[pc]
 
-    def _build_label_map(self) -> None:
+    def _rebuild_compacted(self) -> None:
+        """Build exec_lines and label mapping.
+        Label-only lines do not take an address; labels map to the next
+        executable line index.
+        """
+        self.exec_lines = []
         self.labels.clear()
-        for idx, raw in enumerate(self.lines):
-            s = raw.strip()
-            if s.endswith(":") and (":" not in s[:-1]):  # "name:" 형태만
+        for raw in self.lines:
+            s = (raw or "").strip()
+            # Label-only line: "name:" (colon only at the end)
+            if s.endswith(":") and (":" not in s[:-1]):
                 name = s[:-1].strip()
                 if name:
-                    # 같은 이름이 여러 번 나오면 첫 번째만 유효(간단 규칙)
-                    self.labels.setdefault(name, idx)
+                    # First occurrence wins (simple rule)
+                    self.labels.setdefault(name, len(self.exec_lines))
+                continue  # do not include label-only line in exec_lines
+            # Keep all other lines (including empty, treated as NOP)
+            self.exec_lines.append(raw)
+

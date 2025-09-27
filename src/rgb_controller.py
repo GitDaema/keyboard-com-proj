@@ -114,11 +114,51 @@ def disconnect():
         finally:
             client = None
 
-def init_all_keys(debug: bool = False):
-    for key in km.available_labels():
+def init_all_keys(debug: bool = False) -> bool:
+    """
+    Clear all keyboard LEDs to black in a single atomic update.
+    This avoids per-key mode switching that can cause flicker or
+    unexpected colors on first initialization (e.g., after cold boot).
+    """
+    if kb is None or km is None:
+        raise RuntimeError("먼저 connect()를 호출해야 합니다.")
+
+    # Resolve the active keyboard device used by the label map
+    device = None
+    try:
+        device = km._load_keyboard()  # type: ignore[attr-defined]
+    except Exception:
+        device = None
+    device = device or kb
+
+    # Ensure direct mode once (do not repeatedly flip mode per key)
+    try:
+        device.set_mode("direct")
+    except Exception:
+        pass
+
+    # Refresh then apply an all-black frame in one shot
+    try:
+        _refresh_device_leds(device)
+    except Exception:
+        pass
+
+    try:
+        colors = [RGBColor(0, 0, 0)] * len(device.leds)
+        device.set_colors(colors)
+        time.sleep(0.05)
+        # Redundant second pass helps on first run after cold boot
+        device.set_colors(colors)
+        time.sleep(0.02)
         if debug:
-            print(key)
-        set_key_color(key, RGBColor(0, 0, 0))
+            try:
+                print(f"[INFO] Cleared {len(colors)} LEDs to black (atomic)")
+            except Exception:
+                pass
+        return True
+    except Exception:
+        # Fallback (best-effort): do nothing rather than per-key flicker
+        return False
 
 def get_key_color(label: str, fresh: bool = True) -> List[Tuple[int, int, int]]:
     if kb is None or km is None:
