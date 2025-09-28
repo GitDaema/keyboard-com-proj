@@ -5,11 +5,10 @@ import utils.color_presets as cp
 from utils.keyboard_presets import PC as PC_LABELS
 
 
-# Colors per requirement: OFF=dark gray, ON=bright orange
 OFF: RGBColor = cp.DARK_GRAY
-ONES_ON: RGBColor = cp.ORANGE
-TENS_ON: RGBColor = cp.ORANGE_BRIGHT
-EQUAL_DIGIT_ON: RGBColor = cp.BRIGHT_YELLOW  # 매우 강한 노란색
+ONES_ON: RGBColor = cp.PINK
+TENS_ON: RGBColor = cp.BRIGHT_YELLOW
+EQUAL_DIGIT_ON: RGBColor = cp.ORANGE
 
 
 def _digit_to_label(d: int) -> str:

@@ -2,6 +2,7 @@
 from rgb_controller import set_key_color, get_key_color
 from openrgb.utils import RGBColor
 from utils.keyboard_presets import VARIABLE_KEYS
+import time
 
 # 거리 계산에서 G 채널은 낮은 가중치를 둬서 R/B 악센트 차이를 더 잘 반영
 WG = 0.3  # R,B=1.0, G=0.3
@@ -63,22 +64,56 @@ def _nearest_val_from_rgb(r: int, g: int, b: int) -> int:
     return VALS[best_idx]
 
 class DataMemoryRGBVisual:
-    def __init__(self, *, binary_labels=None) -> None:
+    def __init__(self, *, binary_labels=None, samples: int = 3, sample_delay_ms: int = 0, debug: bool = False) -> None:
         self._binary = dict(binary_labels) if binary_labels else {}
         for k in VARIABLE_KEYS:
             if k in self._binary:
                 del self._binary[k]
+        self._samples = int(samples) if int(samples) >= 1 else 1
+        self._delay = int(sample_delay_ms) if int(sample_delay_ms) >= 0 else 0
+        self._debug = bool(debug)
+
+    def _sleep(self):
+        if self._delay > 0:
+            time.sleep(self._delay / 1000.0)
+
+    def _read_rgb_multi(self, name: str) -> tuple[int, int, int]:
+        rs = gs = bs = 0
+        n = max(1, self._samples)
+        for _ in range(n):
+            r, g, b = get_key_color(name, fresh=True)[0]
+            rs += int(r); gs += int(g); bs += int(b)
+            self._sleep()
+        return (rs // n, gs // n, bs // n)
 
     def get(self, name: str) -> int:
-        r, g, b = get_key_color(name, fresh=True)[0]
         if name in self._binary:
+            # Majority vote over multiple samples for robust bit read
             on_rgb, off_rgb = self._binary[name]
             def d2(px, py):
                 dr, dg, db = px[0]-py[0], px[1]-py[1], px[2]-py[2]
                 return (dr*dr) + (WG*dg*dg) + (db*db)
-            return 1 if d2((r,g,b), on_rgb) <= d2((r,g,b), off_rgb) else 0
+            votes_on = 0
+            votes_off = 0
+            n = max(1, self._samples)
+            for _ in range(n):
+                r, g, b = get_key_color(name, fresh=True)[0]
+                if d2((r,g,b), on_rgb) <= d2((r,g,b), off_rgb):
+                    votes_on += 1
+                else:
+                    votes_off += 1
+                self._sleep()
+            bit = 1 if votes_on >= votes_off else 0
+            if self._debug:
+                print(f"[RGBMem] get-bit {name}: on={votes_on} off={votes_off} -> {bit}")
+            return bit
+        # For numeric variables, average RGB and map to nearest LUT color
+        r, g, b = self._read_rgb_multi(name)
         v = _nearest_val_from_rgb(r, g, b)
-        return _wrap_s8(v)
+        val = _wrap_s8(v)
+        if self._debug:
+            print(f"[RGBMem] get-val {name}: avg=({r},{g},{b}) -> {val}")
+        return val
 
     def set(self, name: str, val: int) -> None:
         if name in self._binary:
@@ -96,4 +131,3 @@ class DataMemoryRGBVisual:
 
     def get_flag(self, label: str) -> bool:
         return bool(self.get(label))
-

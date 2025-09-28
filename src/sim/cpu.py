@@ -3,7 +3,7 @@ from typing import Dict, Any, List, Tuple
 
 from utils.keyboard_presets import FLAG_LABELS, BINARY_COLORS
 from utils.stage_indicator import post_stage, clear_stages
-from utils.ir_indicator import update_from_decoded, clear_ir, encode_from_source_line_fixed, set_ir
+from utils.ir_indicator import update_from_decoded, clear_ir, encode_from_source_line_fixed, set_ir, read_ir
 from utils.run_pause_indicator import run_on, run_off
 from utils.pc_indicator import update_pc, clear_pc
 
@@ -12,6 +12,7 @@ from sim.ir import IR
 from sim.data_memory_rgb_visual import DataMemoryRGBVisual
 from sim.program_memory import ProgramMemory
 from sim.parser import parse_line, preprocess_program
+from sim.assembler import assemble_program, AsmInsn, OPCODES, BR_COND, EXT_TYPE_IMM
 
 from utils.bit_lut import (
     add8_via_lut, sub8_via_lut, and8_via_lut, or8_via_lut, xor8_via_lut,
@@ -78,7 +79,7 @@ def _set_zn_from_val(flags: Dict[str, int], v: int) -> None:
     flags["N"] = 1 if v < 0 else 0
 
 class CPU:
-    def __init__(self, *, debug: bool = False, mem=None, interactive: bool = False) -> None:
+    def __init__(self, *, debug: bool = False, mem=None, interactive: bool = False, use_isa: bool = True) -> None:
         self.pc = PC()
         self.ir = IR()
         self.mem = mem if mem is not None else DataMemoryRGBVisual(binary_labels=BINARY_COLORS)
@@ -92,14 +93,27 @@ class CPU:
 
         self.interactive = interactive                         # ← 스텝 실행 플래그
         self._continue_run = False                             # ← 'c' 입력 시 계속 진행
+        self.use_isa = use_isa                                 # ← ISA 모드 사용 여부
+
+        # ISA instruction stream (when use_isa=True)
+        self._isa: list[AsmInsn] = []
 
     # ---------- 외부 API ----------
-    def load_program(self, lines: List[str]) -> None:
-        try:
-            expanded = preprocess_program(lines)
-        except Exception:
-            expanded = lines
-        self.prog.load_program(expanded)
+    def load_program(self, lines: List[str], *, debug: bool | None = None) -> None:
+        dbg = self.debug if debug is None else bool(debug)
+        if self.use_isa:
+            # Assemble into ISA stream (2-byte per insn)
+            try:
+                self._isa = assemble_program(lines, debug=dbg)
+            except Exception as ex:
+                print(f"[ASM] Error: {ex}. Falling back to raw lines.")
+                self._isa = []
+        else:
+            try:
+                expanded = preprocess_program(lines)
+            except Exception:
+                expanded = lines
+            self.prog.load_program(expanded)
         self.pc.reset()
         self.halted = False
         self.ir.clear()
@@ -139,22 +153,25 @@ class CPU:
             self._on_halt()
             return False
 
+        if self.use_isa:
+            return self._step_isa()
+        else:
+            return self._step_micro()
+
+    def _step_micro(self) -> bool:
+        # Original micro-op per line execution (legacy)
         # Capture PC at the start of the step for accurate logging
         start_pc = self.pc.value
-
         line = self.prog.fetch(self.pc.value)
         if line is None:
             self.halted = True
             self._on_halt()
             return False
-
         self._pc_overridden = False
         self.ir.raw = line
         self._on_fetch(line)
-
         ops = parse_line(line)
         for op, args in ops:
-            # 간단 해법: 각 마이크로-옵 시작 전에 FETCH를 명시적으로 표시
             try:
                 post_stage("FETCH")
             except Exception:
@@ -163,25 +180,317 @@ class CPU:
             self._on_decode((op, args))
             self._println(
                 f"PC:{self.pc.value:02d} | OP:{op:<4} | ARGS:{args} "
-                f"| Z:{self.flags['Z']} N:{self.flags['N']} V:{self.flags['V']} "
-                f"| b:{getattr(self.mem, 'vars', {}).get('b','N/A')}"
+                f"| Z:{self.flags['Z']} N:{self.flags['N']} V:{self.flags['V']}"
             )
             changes = self._exec_one(op, args)
             self._on_writeback(changes)
-            # 플래그 LED 업데이트
             self._sync_flag_leds()
             self._maybe_pause()
             if self.halted or self._pc_overridden:
                 break
-
-        # Report PC transition based on the start-of-step PC
         if not self._pc_overridden:
             self.pc.increment(1)
             self._on_pc_advance(start_pc, self.pc.value)
         else:
             self._on_pc_advance(start_pc, self.pc.value)
-
         self.ir.clear()
+        return not self.halted
+
+    def _step_isa(self) -> bool:
+        start_pc = self.pc.value
+        if start_pc < 0 or start_pc >= len(self._isa):
+            self.halted = True
+            self._on_halt()
+            return False
+        cur_pc = start_pc
+        ext_imm_pending = False
+        ext_imm_val = 0
+        # Consume any prefix frames (e.g., EXTI) before executing the real op
+        while True:
+            insn = self._isa[cur_pc]
+            # FETCH stage + IR update (write)
+            try:
+                post_stage("FETCH")
+            except Exception:
+                pass
+            try:
+                update_pc(cur_pc)
+            except Exception:
+                pass
+            try:
+                set_ir(insn.op4, insn.dst4, insn.arg8)
+            except Exception:
+                pass
+            self._println(f"[FETCH] PC={cur_pc:02d}  insn='{insn.text}' | op={insn.op4:X} dst={insn.dst4:X} arg={insn.arg8:02X}")
+
+            # DECODE stage (read IR back)
+            try:
+                post_stage("DECODE")
+            except Exception:
+                pass
+            op4, dst4, arg8 = read_ir(samples=3, use_calibration=True, debug=False)
+            self._println(f"[DECODE] op={op4:X} dst={dst4:X} arg={arg8:02X}")
+
+            # EXT prefix: op nibble matches NOP but with DST marking type
+            if op4 == OPCODES.get("EXT", 0x0) and (dst4 & 0xF) == (EXT_TYPE_IMM & 0xF):
+                # Latch immediate for next op
+                ext_imm_pending = True
+                ext_imm_val = int(arg8 if arg8 < 128 else arg8 - 256)
+                self._on_execute(f"EXTI #{ext_imm_val}")
+                # WRITEBACK (no changes)
+                try:
+                    post_stage("WRITEBACK")
+                except Exception:
+                    pass
+                self._println("[WB]     (no changes)")
+                cur_pc += 1
+                continue
+            break
+
+        # EXECUTE
+        taken = False
+        next_pc = cur_pc + 1
+        ch: Dict[str, int] = {}
+        try:
+            post_stage("EXECUTE")
+        except Exception:
+            pass
+
+        def var_name(v4: int) -> str:
+            from utils.keyboard_presets import ID_TO_VAR
+            return ID_TO_VAR.get(int(v4) & 0xF, 'q')
+
+        # Helper: write group from signed int
+        def _write_u8_to_group(grp: str, u8: int):
+            labels = self._group_labels(grp)
+            u8 &= 0xFF
+            width = len(labels)
+            for i in range(width):
+                bit = (u8 >> i) & 1
+                lab = labels[width - 1 - i]
+                self.mem.set(lab, bit)
+
+        def _read_res_s8() -> int:
+            u8 = self._read_u8_from_group("RES")
+            return u8 if u8 < 128 else u8 - 256
+
+        # Execute by opcode
+        if op4 == OPCODES["NOP"]:
+            self._on_execute("NOP (ISA)")
+        elif op4 == OPCODES["HALT"]:
+            self._on_execute("HALT (ISA)")
+            self.halted = True
+        elif op4 == OPCODES["MOVI"]:
+            dst = var_name(dst4)
+            imm = int(arg8 if arg8 < 128 else arg8 - 256)
+            _write_u8_to_group("SRC1", arg8)
+            self._on_execute(f"MOVI {dst}, #{imm}")
+            # COPY → PACK
+            ch = {}
+            # Directly set via PACK pipeline
+            self._clear_group("RES")
+            self._write_u8_to_group("RES", arg8)
+            v = _read_res_s8()
+            self.mem.set(dst, v)
+            ch[dst] = v
+        elif op4 == OPCODES["MOV"]:
+            dst = var_name(dst4)
+            src = var_name(arg8 & 0xF)
+            v = self.mem.get(src)
+            self._on_execute(f"MOV {dst},{src} ; {dst}={v}")
+            self.mem.set(dst, v)
+            ch = {dst: v}
+        elif op4 in (OPCODES["ADD"], OPCODES["ADDI"], OPCODES["SUB"], OPCODES["SUBI"], OPCODES["AND"], OPCODES["OR"], OPCODES["XOR"], OPCODES["CMP"], OPCODES["SHIFT"], OPCODES["NEG"]):
+            # Map to existing micro-ops via groups/LUTs
+            # Prepare operands into groups as needed
+            is_cmpi = (op4 == OPCODES["CMP"]) and ext_imm_pending
+            if (op4 in (OPCODES["ADDI"], OPCODES["SUBI"])) or is_cmpi:
+                dst = var_name(dst4)
+                a = self.mem.get(dst)
+                b = int(ext_imm_val if is_cmpi else (arg8 if arg8 < 128 else arg8 - 256))
+                self._write_u8_to_group("SRC1", _to_u8(a))
+                self._write_u8_to_group("SRC2", _to_u8(b))
+            elif op4 in (OPCODES["SHIFT"],):
+                dst = var_name(dst4)
+                a = self.mem.get(dst)
+                self._write_u8_to_group("SRC1", _to_u8(a))
+            elif op4 == OPCODES["NEG"]:
+                dst = var_name(dst4)
+                a = self.mem.get(dst)
+                # Prepare groups for 0 - a
+                self._write_u8_to_group("SRC1", 0)
+                self._write_u8_to_group("SRC2", _to_u8(a))
+            else:
+                dst = var_name(dst4)
+                src = var_name(arg8 & 0xF)
+                a = self.mem.get(dst)
+                b = self.mem.get(src)
+                self._write_u8_to_group("SRC1", _to_u8(a))
+                self._write_u8_to_group("SRC2", _to_u8(b))
+
+            # Execute using existing helpers
+            if op4 == OPCODES["ADDI"]:
+                add8_via_lut(self.mem, src1=SRC1, src2=SRC2, dst=RES, lsb_first=False)
+                res_u8 = self._read_u8_from_group("RES")
+                v = res_u8 if res_u8 < 128 else res_u8 - 256
+                self.mem.set(dst, v)
+                inputs_same_sign = _sign_bit(a) == _sign_bit(b)
+                self.flags["V"] = 1 if inputs_same_sign and (_sign_bit(a) != _sign_bit(v)) else 0
+                self.flags["C"] = 1 if (_to_u8(a) + _to_u8(b)) > 0xFF else 0
+                _set_zn_from_val(self.flags, v)
+                self._on_execute(f"ADDI {dst}, #{b}")
+                ch = {dst: v}
+            elif op4 == OPCODES["ADD"]:
+                add8_via_lut(self.mem, src1=SRC1, src2=SRC2, dst=RES, lsb_first=False)
+                res_u8 = self._read_u8_from_group("RES")
+                v = res_u8 if res_u8 < 128 else res_u8 - 256
+                self.mem.set(dst, v)
+                inputs_same_sign = _sign_bit(a) == _sign_bit(b)
+                self.flags["V"] = 1 if inputs_same_sign and (_sign_bit(a) != _sign_bit(v)) else 0
+                self.flags["C"] = 1 if (_to_u8(a) + _to_u8(b)) > 0xFF else 0
+                _set_zn_from_val(self.flags, v)
+                self._on_execute(f"ADD {dst}, {src}")
+                ch = {dst: v}
+            elif op4 == OPCODES["SUBI"]:
+                sub8_via_lut(self.mem, src1=SRC1, src2=SRC2, dst=RES, lsb_first=False)
+                res_u8 = self._read_u8_from_group("RES")
+                v = res_u8 if res_u8 < 128 else res_u8 - 256
+                self.mem.set(dst, v)
+                inputs_diff_sign = _sign_bit(a) != _sign_bit(b)
+                self.flags["V"] = 1 if inputs_diff_sign and (_sign_bit(a) != _sign_bit(v)) else 0
+                self.flags["C"] = 1 if _to_u8(a) >= _to_u8(b) else 0
+                _set_zn_from_val(self.flags, v)
+                self._on_execute(f"SUBI {dst}, #{b}")
+                ch = {dst: v}
+            elif op4 == OPCODES["SUB"]:
+                sub8_via_lut(self.mem, src1=SRC1, src2=SRC2, dst=RES, lsb_first=False)
+                res_u8 = self._read_u8_from_group("RES")
+                v = res_u8 if res_u8 < 128 else res_u8 - 256
+                self.mem.set(dst, v)
+                inputs_diff_sign = _sign_bit(a) != _sign_bit(b)
+                self.flags["V"] = 1 if inputs_diff_sign and (_sign_bit(a) != _sign_bit(v)) else 0
+                self.flags["C"] = 1 if _to_u8(a) >= _to_u8(b) else 0
+                _set_zn_from_val(self.flags, v)
+                self._on_execute(f"SUB {dst}, {src}")
+                ch = {dst: v}
+            elif op4 in (OPCODES["AND"], OPCODES["OR"], OPCODES["XOR"]):
+                lut = {OPCODES["AND"]: and8_via_lut, OPCODES["OR"]: or8_via_lut, OPCODES["XOR"]: xor8_via_lut}[op4]
+                lut(self.mem, src1=SRC1, src2=SRC2, dst=RES, lsb_first=False)
+                res_u8 = self._read_u8_from_group("RES")
+                v = res_u8 if res_u8 < 128 else res_u8 - 256
+                self.mem.set(dst, v)
+                self.flags["V"] = 0
+                _set_zn_from_val(self.flags, v)
+                name = {OPCODES["AND"]:"AND", OPCODES["OR"]:"OR", OPCODES["XOR"]:"XOR"}[op4]
+                self._on_execute(f"{name} {dst}, {src}")
+                ch = {dst: v}
+            elif op4 == OPCODES["CMP"] and not is_cmpi:
+                sub8_via_lut(self.mem, src1=SRC1, src2=SRC2, dst=RES, lsb_first=False)
+                res_u8 = self._read_u8_from_group("RES")
+                v = res_u8 if res_u8 < 128 else res_u8 - 256
+                inputs_diff_sign = _sign_bit(a) != _sign_bit(b)
+                self.flags["V"] = 1 if inputs_diff_sign and (_sign_bit(a) != _sign_bit(v)) else 0
+                self.flags["C"] = 1 if _to_u8(a) >= _to_u8(b) else 0
+                _set_zn_from_val(self.flags, v)
+                self._on_execute(f"CMP {dst}, {src}")
+            elif op4 == OPCODES["CMP"] and is_cmpi:
+                sub8_via_lut(self.mem, src1=SRC1, src2=SRC2, dst=RES, lsb_first=False)
+                res_u8 = self._read_u8_from_group("RES")
+                v = res_u8 if res_u8 < 128 else res_u8 - 256
+                inputs_diff_sign = _sign_bit(a) != _sign_bit(b)
+                self.flags["V"] = 1 if inputs_diff_sign and (_sign_bit(a) != _sign_bit(v)) else 0
+                self.flags["C"] = 1 if _to_u8(a) >= _to_u8(b) else 0
+                _set_zn_from_val(self.flags, v)
+                self._on_execute(f"CMPI {dst}, #{b}")
+            elif op4 == OPCODES["SHIFT"]:
+                # ARG bit0 decides direction
+                if (arg8 & 0x01) == 0:
+                    # SHL
+                    shl8_via_lut(self.mem, src=SRC1, dst=RES, lsb_first=False)
+                    res_u8 = self._read_u8_from_group("RES")
+                    v = res_u8 if res_u8 < 128 else res_u8 - 256
+                    self.flags["C"] = 1 if (_to_u8(a) & 0x80) else 0
+                    ov = 1 if (_sign_bit(a) != _sign_bit(v)) else 0
+                    self.mem.set(dst, v)
+                    self.flags["V"] = ov
+                    _set_zn_from_val(self.flags, v)
+                    self._on_execute(f"SHL {dst}")
+                    ch = {dst: v}
+                else:
+                    # SHR
+                    shr8_via_lut(self.mem, src=SRC1, dst=RES, lsb_first=False)
+                    res_u8 = self._read_u8_from_group("RES")
+                    v = res_u8 if res_u8 < 128 else res_u8 - 256
+                    self.mem.set(dst, v)
+                    self.flags["C"] = 1 if (_to_u8(a) & 0x01) else 0
+                    self.flags["V"] = 0
+                    _set_zn_from_val(self.flags, v)
+                    self._on_execute(f"SHR {dst}")
+                    ch = {dst: v}
+            elif op4 == OPCODES["NEG"]:
+                # Perform 0 - a via LUT
+                sub8_via_lut(self.mem, src1=SRC1, src2=SRC2, dst=RES, lsb_first=False)
+                res_u8 = self._read_u8_from_group("RES")
+                v = res_u8 if res_u8 < 128 else res_u8 - 256
+                self.mem.set(dst, v)
+                # Flags like SUB with a=0, b=a
+                inputs_diff_sign = _sign_bit(0) != _sign_bit(a)
+                self.flags["V"] = 1 if inputs_diff_sign and (_sign_bit(0) != _sign_bit(v)) else 0
+                self.flags["C"] = 1 if _to_u8(0) >= _to_u8(a) else 0
+                _set_zn_from_val(self.flags, v)
+                self._on_execute(f"NEG {dst}")
+                ch = {dst: v}
+        elif op4 == OPCODES["JMP"] or op4 == OPCODES["BR"]:
+            # Relative jump/branch; arg8 is signed offset
+            rel = int(arg8 if arg8 < 128 else arg8 - 256)
+            if op4 == OPCODES["JMP"]:
+                taken = True
+                next_pc = cur_pc + 1 + rel
+                self._on_execute(f"JMP rel {rel:+d} -> {next_pc:02d}")
+            else:
+                # Evaluate condition from dst4 nibble
+                cond_n = int(dst4) & 0xF
+                name_by_cond = {v: k for k, v in BR_COND.items()}
+                cname = name_by_cond.get(cond_n, "BEQ")
+                Z = self.flags.get("Z", 0)
+                N = self.flags.get("N", 0)
+                V = self.flags.get("V", 0)
+                taken = (
+                    (cname == "BEQ" and Z == 1) or
+                    (cname == "BNE" and Z == 0) or
+                    (cname == "BMI" and N == 1) or
+                    (cname == "BPL" and N == 0) or
+                    (cname == "BVS" and V == 1) or
+                    (cname == "BVC" and V == 0) or
+                    (cname == "BCS" and V == 1) or
+                    (cname == "BCC" and V == 0)
+                )
+                if taken:
+                    next_pc = cur_pc + 1 + rel
+                    self._on_execute(f"{cname} taken rel {rel:+d} -> {next_pc:02d}")
+                else:
+                    self._on_execute(f"{cname} not-taken")
+        else:
+            self._on_execute(f"(unknown ISA op) {op4:X}")
+
+        # WRITEBACK stage
+        try:
+            post_stage("WRITEBACK")
+        except Exception:
+            pass
+        if ch:
+            self._println(f"[WB]     {', '.join(f'{k}={v:4d}' for k,v in ch.items())}")
+        else:
+            self._println("[WB]     (no changes)")
+        self._sync_flag_leds()
+        self._maybe_pause()
+
+        # Advance PC
+        old_pc = start_pc
+        self.pc.value = next_pc
+        self._on_pc_advance(old_pc, self.pc.value)
+        if self.halted:
+            self._on_halt()
         return not self.halted
 
     def _maybe_pause(self) -> None:

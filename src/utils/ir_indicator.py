@@ -1,6 +1,7 @@
-from typing import Dict, Tuple, Any
+from typing import Dict, Tuple, Any, List
 from openrgb.utils import RGBColor
-from rgb_controller import set_labels_atomic, set_key_color
+from rgb_controller import set_labels_atomic, set_key_color, get_key_color
+import time
 from utils.keyboard_presets import (
     IR12, IR_OP_1BIT, IR_DST_1BIT, IR_ARG_2BIT,
     IR_ONOFF, IR_4STATE, VAR_TO_ID,
@@ -203,6 +204,168 @@ def clear_ir() -> None:
             set_key_color(lab, RGBColor(0,0,0))
         except Exception:
             pass
+
+
+# ------------ Calibration storage (optional) ------------
+_CAL_OP_ONOFF: Dict[str, Tuple[Tuple[int, int, int], Tuple[int, int, int]]] = {}
+_CAL_DST_ONOFF: Dict[str, Tuple[Tuple[int, int, int], Tuple[int, int, int]]] = {}
+_CAL_ARG_4STATE: Dict[str, List[Tuple[int, int, int]]] = {}
+
+
+def calibrate_ir(samples: int = 3, settle_ms: int = 10, debug: bool = False) -> None:
+    """Calibrate IR colors per key for robust decoding.
+    - Measures per-key ON/OFF for OP/DST and four-state colors for ARG pairs.
+    - Stores centroids in module-level dicts used by read_ir(use_calibration=True).
+    - Non-destructive: only affects decoding; can be re-run anytime.
+    """
+    def _avg_rgb(labels: List[str]) -> Dict[str, Tuple[int, int, int]]:
+        d: Dict[str, Tuple[int, int, int]] = {}
+        for lab in labels:
+            rs = gs = bs = 0
+            for _ in range(max(1, samples)):
+                r, g, b = get_key_color(lab, fresh=True)[0]
+                rs += int(r); gs += int(g); bs += int(b)
+                if settle_ms > 0:
+                    time.sleep(settle_ms / 1000.0)
+            n = max(1, samples)
+            d[lab] = (rs // n, gs // n, bs // n)
+        return d
+
+    # OP bits: measure OFF then ON per bit
+    global _CAL_OP_ONOFF, _CAL_DST_ONOFF, _CAL_ARG_4STATE
+    _CAL_OP_ONOFF = {}
+    _CAL_DST_ONOFF = {}
+    _CAL_ARG_4STATE = {}
+
+    # OP OFF
+    set_ir(0, 0, 0)
+    if settle_ms > 0:
+        time.sleep(settle_ms / 1000.0)
+    op_off = _avg_rgb(IR_OP_1BIT)
+    # OP ON per bit
+    for i, lab in enumerate(IR_OP_1BIT):
+        opn = (1 << (3 - i)) & 0xF
+        set_ir(opn, 0, 0)
+        if settle_ms > 0:
+            time.sleep(settle_ms / 1000.0)
+        meas = _avg_rgb([lab])
+        _CAL_OP_ONOFF[lab] = (meas[lab], op_off[lab]) if debug and False else (meas[lab], op_off[lab])
+        # Normalize order: (on, off)
+        _CAL_OP_ONOFF[lab] = (meas[lab], op_off[lab])
+
+    # DST OFF
+    set_ir(0, 0, 0)
+    if settle_ms > 0:
+        time.sleep(settle_ms / 1000.0)
+    dst_off = _avg_rgb(IR_DST_1BIT)
+    # DST ON per bit
+    for i, lab in enumerate(IR_DST_1BIT):
+        dst = (1 << (3 - i)) & 0xF
+        set_ir(0, dst, 0)
+        if settle_ms > 0:
+            time.sleep(settle_ms / 1000.0)
+        meas = _avg_rgb([lab])
+        _CAL_DST_ONOFF[lab] = (meas[lab], dst_off[lab])
+
+    # ARG 4 states per pair
+    for i, lab in enumerate(IR_ARG_2BIT):
+        states: List[Tuple[int, int, int]] = []
+        for val2 in range(4):
+            arg = (val2 & 0x3) << (6 - 2 * i)
+            set_ir(0, 0, arg)
+            if settle_ms > 0:
+                time.sleep(settle_ms / 1000.0)
+            meas = _avg_rgb([lab])
+            states.append(meas[lab])
+        _CAL_ARG_4STATE[lab] = states
+
+    if debug:
+        print("[IR CAL] OP on/off:")
+        for lab, (on, off) in _CAL_OP_ONOFF.items():
+            print(f"  {lab}: on={on} off={off}")
+        print("[IR CAL] DST on/off:")
+        for lab, (on, off) in _CAL_DST_ONOFF.items():
+            print(f"  {lab}: on={on} off={off}")
+        print("[IR CAL] ARG 4-state:")
+        for lab, arr in _CAL_ARG_4STATE.items():
+            print(f"  {lab}: {arr}")
+
+
+# ------------ New: Read IR back from keyboard (decode F1~F12) ------------
+def _nearest_1bit(role: str, rgb: Tuple[int, int, int], lab: str | None = None) -> int:
+    on, off = IR_ONOFF[role]
+    def d2(a, b):
+        return (a[0]-b[0])**2 + (a[1]-b[1])**2 + (a[2]-b[2])**2
+    # Use calibration if available
+    if lab is not None:
+        if role == "OP" and lab in _CAL_OP_ONOFF:
+            on, off = _CAL_OP_ONOFF[lab]
+        if role == "DST" and lab in _CAL_DST_ONOFF:
+            on, off = _CAL_DST_ONOFF[lab]
+    return 1 if d2(rgb, on) < d2(rgb, off) else 0
+
+
+def _nearest_2bit(role: str, rgb: Tuple[int, int, int], lab: str | None = None) -> int:
+    palette = IR_4STATE.get(role) or IR_4STATE.get("OP") or [
+        (255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 255)
+    ]
+    # Use calibration if available for ARG pairs
+    if role == "ARG" and lab is not None and lab in _CAL_ARG_4STATE:
+        palette = _CAL_ARG_4STATE[lab]
+    def d2(a, b):
+        return (a[0]-b[0])**2 + (a[1]-b[1])**2 + (a[2]-b[2])**2
+    best = 0
+    best_d = 10**12
+    for i, col in enumerate(palette):
+        dist = d2(rgb, col)
+        if dist < best_d:
+            best_d = dist
+            best = i
+    return best & 0x3
+
+
+def read_ir(*, samples: int = 1, use_calibration: bool = True, debug: bool = False) -> Tuple[int, int, int]:
+    """Decode current IR(F1..F12) back to (op4,dst4,arg8) by reading LED colors.
+    - OP/DST: 1-bit per key (ON/OFF) on F1..F4 and F5..F8.
+    - ARG:    2-bit per key (4-state color) on F9..F12.
+    - samples: read multiple times per key and decide by majority vote.
+    - use_calibration: if True and calibration data exist, use them for decoding.
+    """
+    # Read OP nibble
+    op_bits = 0
+    for i, lab in enumerate(IR_OP_1BIT):
+        votes = [0, 0]
+        for _ in range(max(1, samples)):
+            rgb = get_key_color(lab, fresh=True)[0]
+            bit_s = _nearest_1bit("OP", rgb, lab if use_calibration else None)
+            votes[bit_s] += 1
+        bit = 1 if votes[1] >= votes[0] else 0
+        op_bits = (op_bits << 1) | bit
+    # Read DST nibble
+    dst_bits = 0
+    for i, lab in enumerate(IR_DST_1BIT):
+        votes = [0, 0]
+        for _ in range(max(1, samples)):
+            rgb = get_key_color(lab, fresh=True)[0]
+            bit_s = _nearest_1bit("DST", rgb, lab if use_calibration else None)
+            votes[bit_s] += 1
+        bit = 1 if votes[1] >= votes[0] else 0
+        dst_bits = (dst_bits << 1) | bit
+    # Read ARG byte (pairs)
+    arg_val = 0
+    for i, lab in enumerate(IR_ARG_2BIT):
+        votes = [0, 0, 0, 0]
+        for _ in range(max(1, samples)):
+            rgb = get_key_color(lab, fresh=True)[0]
+            v2s = _nearest_2bit("ARG", rgb, lab if use_calibration else None)
+            votes[v2s] += 1
+        v2 = max(range(4), key=lambda k: votes[k])
+        shift = 6 - 2*i
+        arg_val |= (v2 & 0x3) << shift
+    if debug:
+        print(f"[IR] read op={op_bits:04b} dst={dst_bits:04b} arg={arg_val:08b} | samples={samples} cal={'Y' if use_calibration else 'N'}")
+    return (op_bits & 0xF), (dst_bits & 0xF), (arg_val & 0xFF)
+
 
 
 _MACHINE_OPS = {

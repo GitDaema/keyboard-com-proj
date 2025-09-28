@@ -1,46 +1,68 @@
 # Project Overview
 
-This project is a Python-based tool for controlling keyboard RGB lighting. It uses the `openrgb-python` library to communicate with an OpenRGB server, allowing users to programmatically change the colors of individual keys.
+This project is a Python-based 8-bit CPU and ISA (Instruction Set Architecture) visualizer that uses a keyboard's RGB lighting to display the CPU's internal state in real-time. It leverages the `openrgb-python` library to communicate with an OpenRGB server, turning the keyboard into a hardware debugger and educational tool.
+
+The state of the CPU, including registers, flags, program counter (PC), and instruction register (IR), is mapped to the colors of individual keys.
 
 The project is structured as follows:
 
-*   `controller/`: Contains the core Python scripts for controlling the keyboard.
-    *   `main.py`: The main script that connects to the OpenRGB server and runs a demo sequence.
-    *   `keyboard_map.py`: A module that maps human-readable key labels (e.g., "esc", "f1") to their corresponding LED indices.
-    *   `maps/`: Contains JSON files with LED layout information for specific keyboard models.
+*   `src/`: Contains the core Python source code.
+    *   `main.py`: The main entry point that initializes the controller, configures the CPU, and runs the demo program.
+    *   `rgb_controller.py`: Manages the connection to the OpenRGB server and provides an API for setting key colors.
+    *   `sim/`: The CPU simulator components.
+        *   `cpu.py`: The main CPU execution loop.
+        *   `assembler.py`: Assembles the custom high-level language into a 2-byte ISA.
+        *   `parser.py`: Parses the high-level language, supporting features like `IF/THEN/ELSE` blocks.
+        *   `data_memory_rgb_visual.py`: Visualizes memory values on the keyboard and reads them back by sampling LED colors.
+    *   `utils/`: Helper modules for keyboard mapping, color presets, and visualizing specific CPU parts (PC, IR, flags, etc.).
+*   `data/`: Contains data files.
+    *   `maps/`: JSON and CSV files with LED layout information for specific keyboard models.
 *   `scripts/`: Contains shell scripts for running the application.
-    *   `run_demo_windows.sh`: A script for running the demo on Windows.
+    *   `run_demo_windows.sh`: A script for running the demo on Windows, which can automatically start the OpenRGB server.
 *   `requirements.txt`: Lists the Python dependencies for the project.
 
 # Building and Running
 
-To run this project, you will need to have Python and the `openrgb-python` library installed. You will also need to have the OpenRGB application running with the server enabled.
+To run this project, you need Python (3.9+ recommended) and the OpenRGB application.
 
 **1. Install Dependencies:**
 
+It is recommended to use a Python virtual environment.
+
 ```bash
+# Create and activate a virtual environment
+python -m venv .venv
+# On Windows
+.venv\Scripts\activate
+# On macOS/Linux
+# source .venv/bin/activate
+
+# Install dependencies
 pip install -r requirements.txt
 ```
 
 **2. Run the Demo:**
 
-The `scripts/run_demo_windows.sh` script provides a convenient way to run the demo on Windows. It will automatically start the OpenRGB server and then execute the main controller script.
+Before running, ensure the OpenRGB application is running with the server active, and close any other vendor-specific RGB control software (e.g., iCUE, Razer Synapse).
+
+The `scripts/run_demo_windows.sh` script provides the most convenient way to run the demo on Windows, as it can automatically start the OpenRGB server for you.
 
 ```bash
+# Recommended for Windows
 ./scripts/run_demo_windows.sh
 ```
 
-Alternatively, you can run the main script directly:
+Alternatively, you can start the OpenRGB server manually and then run the main script directly:
 
 ```bash
-python controller/main.py
+# Run the main script (after ensuring OpenRGB server is running)
+python src/main.py
 ```
 
-**Note:** Before running the script, make sure that the OpenRGB server is running and that any other RGB control software (e.g., iCUE, Razer Synapse) is closed.
+# Development and Customization
 
-# Development Conventions
-
-*   The project uses a Python virtual environment (`.venv`) to manage dependencies.
-*   The code is written in Python and follows standard Python coding conventions.
-*   The `keyboard_map.py` module provides a clear and extensible way to add support for new keyboard layouts.
-*   The use of shell scripts for automation simplifies the process of running the application.
+*   **CPU and Language:** The simulator executes a custom high-level language which is pre-processed and assembled into a 2-byte ISA. The language supports variables, arithmetic, and control flow. See `LANGUAGE_SPEC_KO.txt` and `ISA_ENCODING_KO.txt` for details.
+*   **Demo Program:** The demo program executed by the CPU is hardcoded as a list of strings in `src/main.py`. You can modify this list to experiment with the CPU's capabilities.
+*   **Keyboard Mapping:** The project is configured for a `Corsair K70 RGB TKL` by default. To use a different keyboard:
+    1.  Run `python src/utils/export_led_map.py` to generate a new layout JSON for your keyboard.
+    2.  Update the `map_path` variable in `src/rgb_controller.py` to point to your new JSON file.

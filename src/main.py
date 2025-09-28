@@ -18,6 +18,8 @@ import utils.color_presets as cp
 from sim.cpu import CPU
 from utils.run_pause_indicator import run_off
 from sim.data_memory_rgb_visual import DataMemoryRGBVisual
+from utils.ir_indicator import calibrate_ir
+from sim.assembler import assemble_program
 
 def rgb_routine(label: str):
     for c in cp.HEX_COLORS.values():
@@ -45,9 +47,10 @@ def main():
         print("[INFO] All keys ready. Press Enter to start.")
         input()
 
-        mem=DataMemoryRGBVisual(binary_labels=kp.BINARY_COLORS)
-        # 1) CPU 생성 시 LED 메모리 장착
-        cpu = CPU(debug=True, mem=mem, interactive=True)
+        # LED 메모리: 다중 샘플로 안정성 강화 (지연은 0~5ms 수준 권장)
+        mem = DataMemoryRGBVisual(binary_labels=kp.BINARY_COLORS, samples=3, sample_delay_ms=0, debug=False)
+        # 1) CPU 생성: ISA 모드 + 자동 실행(인터랙티브 끔)
+        cpu = CPU(debug=True, mem=mem, interactive=True, use_isa=True)
 
         # 2) 프로그램: 상태가 전부 “불빛”에 저장됨
         #
@@ -69,13 +72,18 @@ def main():
             # 3) a를 0이 될 때까지 감소시키는 루프 (레이블+분기)
 
             "start:",
-            "a = -7",          # 초기값
+            "a = -7",          # 초기값 (MOVI 테스트)
             "x = 5",           # 비교 대상
             "s = 0",           # 임시/플래그 용도
 
+            # SHIFT 테스트: s <- a; SHL/SHR 수행(ISA: SHIFT)
+            "s = a",
+            "SHL s",
+            "SHR s",
+
             # a < 0 이면 a = -a (절대값)
             "IF a < #0 THEN",
-            "    a = 0 - a",
+            "    a = 0 - a",   # NEG 테스트(ISA: NEG)
             "END",
 
             # a == x 이면 d=1, 아니면 d=0
@@ -85,9 +93,9 @@ def main():
             "    d = 0",
             "END",
 
-            # a를 0이 될 때까지 1씩 감소시키는 루프
+            # a == 5가 될 때까지 1씩 감소시키는 루프
             "loop:",
-            "CMPI a, #0",
+            "CMPI a, #5",      # 비교 + 분기(BR rel8)
             "BEQ done",
             "a = a - 1",
             "JMP loop",
@@ -96,9 +104,35 @@ def main():
             "HALT",
         ]
 
-        cpu.load_program(program)
+        # try: # IR 복호화 정확도를 높이기 위해, 선택적 간단 캘리브레이션(수 초 이내)
+        #     calibrate_ir(samples=2, settle_ms=8, debug=False)
+        # except Exception:
+        #     pass
+
+        # try: # 어셈블 결과 간단 덤프(실행용 ISA 기준)
+        #     isa = assemble_program(program, debug=False)
+        #     print("\n[ASM LIST]")
+        #     for i, insn in enumerate(isa):
+        #         b0 = ((insn.op4 & 0xF) << 4) | (insn.dst4 & 0xF)
+        #         b1 = insn.arg8 & 0xFF
+        #         bits16 = f"{((b0<<8)|b1):016b}"
+        #         grouped = " ".join(bits16[j:j+4] for j in range(0, 16, 4))
+        #         print(f"{i:02d}: {insn.text:<16} | {b0:02X} {b1:02X} | {grouped}")
+        # except Exception:
+        #     pass
+
+        # 실행
+        cpu.load_program(program, debug=True)
         cpu.run()
+
+        # 최종 값 확인(빠른 요약)
+        try:
+            va = mem.get('a'); vx = mem.get('x'); vd = mem.get('d'); vs = mem.get('s')
+            print(f"[RESULT] a={va} x={vx} d={vd} s={vs}")
+        except Exception:
+            pass
         
+        # 종료 전 잠시 대기(옵션)
         input()
         
     finally:
