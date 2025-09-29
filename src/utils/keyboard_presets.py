@@ -144,6 +144,27 @@ BINARY_COLORS.update({
 VARIABLE_KEYS = {'q', 'w', 'e', 'r', 'a', 's', 'd', 'z', 'x'}
 
 # ---------------------------------------------------------------------
+# Memory/IO Bus control signals mapped to right-hand modifier cluster
+#   - ADDR_VALID: right_alt (Cyan)
+#   - MEM_RD:     right_fn  (White)
+#   - MEM_WR:     menu      (Bright Orange)
+#   - ACK/BUSY:   right_ctrl(Purple)
+# These act as real handshake lines (read/written) via utils/bus.py
+# ---------------------------------------------------------------------
+BUS_ADDR_VALID = "right_alt"
+BUS_RD         = "right_fn"
+BUS_WR         = "menu"
+BUS_ACK        = "right_ctrl"
+
+# Visual encoding for the bus control lines (ON, OFF)
+BINARY_COLORS.update({
+    BUS_ADDR_VALID: ((0, 255, 255), (60, 60, 60)),   # Cyan / Dark Gray
+    BUS_RD:         ((255, 255, 255), (60, 60, 60)), # White / Dark Gray
+    BUS_WR:         ((255, 210, 20), (60, 60, 60)),  # Bright Orange / Dark Gray
+    BUS_ACK:        ((170, 0, 170),  (60, 60, 60)),  # Purple / Dark Gray
+})
+
+# ---------------------------------------------------------------------
 # RUN/PAUSE indicator (single key + adjustable colors)
 # ---------------------------------------------------------------------
 # 표시 전용 키: CPU가 실행 중이면 ON, 대기/정지면 OFF

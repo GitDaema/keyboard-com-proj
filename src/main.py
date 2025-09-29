@@ -18,6 +18,7 @@ import utils.color_presets as cp
 from sim.cpu import CPU
 from utils.run_pause_indicator import run_off
 from sim.data_memory_rgb_visual import DataMemoryRGBVisual
+from utils.bus import BusInterface, BusMemory
 from utils.ir_indicator import calibrate_ir
 from sim.assembler import assemble_program
 
@@ -48,7 +49,9 @@ def main():
         input()
 
         # LED 메모리: 다중 샘플로 안정성 강화 (지연은 0~5ms 수준 권장)
-        mem = DataMemoryRGBVisual(binary_labels=kp.BINARY_COLORS, samples=3, sample_delay_ms=0, debug=False)
+        mem_core = DataMemoryRGBVisual(binary_labels=kp.BINARY_COLORS, samples=3, sample_delay_ms=0, debug=False)
+        bus = BusInterface(ack_mode="internal", ack_pulse_ms=12, settle_ms=8, ack_timeout_ms=200)
+        mem = BusMemory(mem_core, bus, only_variable_keys=True)
         # 1) CPU 생성: ISA 모드 + 자동 실행(인터랙티브 끔)
         cpu = CPU(debug=True, mem=mem, interactive=True, use_isa=True)
 
