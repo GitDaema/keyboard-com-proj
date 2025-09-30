@@ -1,11 +1,26 @@
-# sim/cpu.py
-from typing import Dict, Any, List, Tuple
+﻿# sim/cpu.py
+from typing import Dict, Any, List, Tuple, Optional
+import time
+import threading
+from queue import Queue, Empty
 
 from utils.keyboard_presets import FLAG_LABELS, BINARY_COLORS
 from utils.stage_indicator import post_stage, clear_stages
 from utils.ir_indicator import update_from_decoded, clear_ir, encode_from_source_line_fixed, set_ir, read_ir
 from utils.run_pause_indicator import run_on, run_off
 from utils.pc_indicator import update_pc, clear_pc
+from utils.control_plane import (
+    set_run_state,
+    set_esc_state,
+    set_step_mode,
+    set_trace_state,
+    set_overlay_mode,
+)
+from utils.control_plane import (
+    poll as cp_poll,
+    maybe_run_service as cp_service,
+    ControlStates,
+)
 
 from sim.pc import PC
 from sim.ir import IR
@@ -23,46 +38,46 @@ from utils.keyboard_presets import SRC1, SRC2, RES
 
 """
 # =========================
-# CPU/Parser 명령어 정리 (signed 버전)
+# CPU/Parser 紐낅졊???뺣━ (signed 踰꾩쟾)
 # =========================
 #
-# ■ 기본 규칙
-# - 모든 계산은 signed 8비트(-128..127)로 동작.
-# - 플래그:
-#     Z (Zero)      : 결과가 0이면 1
-#     N (Negative)  : 결과가 음수(부호비트 1)면 1
-#     V (oVerflow)  : signed overflow 발생 시 1 (ADD/SHL/SUB/CMP 등)
-# - PC는 "다음 명령어 위치". 보통 한 칸씩 증가하지만,
-#   점프/분기(JMP, BEQ 등)가 실행되면 직접 바뀜.
-# - 즉시값 표기: #10, #0x1F, #-3 등 모두 허용.
+# ??湲곕낯 洹쒖튃
+# - 紐⑤뱺 怨꾩궛? signed 8鍮꾪듃(-128..127)濡??숈옉.
+# - ?뚮옒洹?
+#     Z (Zero)      : 寃곌낵媛 0?대㈃ 1
+#     N (Negative)  : 寃곌낵媛 ?뚯닔(遺?몃퉬??1)硫?1
+#     V (oVerflow)  : signed overflow 諛쒖깮 ??1 (ADD/SHL/SUB/CMP ??
+# - PC??"?ㅼ쓬 紐낅졊???꾩튂". 蹂댄넻 ??移몄뵫 利앷??섏?留?
+#   ?먰봽/遺꾧린(JMP, BEQ ??媛 ?ㅽ뻾?섎㈃ 吏곸젒 諛붾?
+# - 利됱떆媛??쒓린: #10, #0x1F, #-3 ??紐⑤몢 ?덉슜.
 #
-# ■ 기본 명령어
-# - NOP / LABEL / HALT / PRINT (동일)
+# ??湲곕낯 紐낅졊??
+# - NOP / LABEL / HALT / PRINT (?숈씪)
 #
-# ■ 값 넣기 / 더하기 / 빼기
-# - MOVI dst, #imm         ; dst ← imm (signed 범위로 래핑 저장)
-# - MOV  dst, src          ; dst ← src
-# - ADDI dst, #imm         ; dst ← dst + imm (Z/N/V 갱신)
-# - ADD  dst, src          ; dst ← dst + src (Z/N/V 갱신)
-# - SUBI dst, #imm         ; dst ← dst - imm (Z/N/V 갱신)
-# - SUB  dst, src          ; dst ← dst - src (Z/N/V 갱신)
+# ??媛??ｊ린 / ?뷀븯湲?/ 鍮쇨린
+# - MOVI dst, #imm         ; dst ??imm (signed 踰붿쐞濡??섑븨 ???
+# - MOV  dst, src          ; dst ??src
+# - ADDI dst, #imm         ; dst ??dst + imm (Z/N/V 媛깆떊)
+# - ADD  dst, src          ; dst ??dst + src (Z/N/V 媛깆떊)
+# - SUBI dst, #imm         ; dst ??dst - imm (Z/N/V 媛깆떊)
+# - SUB  dst, src          ; dst ??dst - src (Z/N/V 媛깆떊)
 #
-# ■ 비트 연산 (Z/N 갱신, V=0)
+# ??鍮꾪듃 ?곗궛 (Z/N 媛깆떊, V=0)
 # - AND/OR/XOR
 #
-# ■ 시프트
-# - SHL dst                ; 산술적 의미의 왼쪽 시프트(최상위 비트 변화로 V 판단)
-# - SHR dst                ; 산술 시프트(ASR, 부호 유지). V=0
+# ???쒗봽??
+# - SHL dst                ; ?곗닠???섎????쇱そ ?쒗봽??理쒖긽??鍮꾪듃 蹂?붾줈 V ?먮떒)
+# - SHR dst                ; ?곗닠 ?쒗봽??ASR, 遺???좎?). V=0
 #
-# ■ 비교 / 분기 (signed)
-# - CMP a, b               ; a-b의 signed 결과 기반으로 Z/N/V 갱신(결과는 버림)
+# ??鍮꾧탳 / 遺꾧린 (signed)
+# - CMP a, b               ; a-b??signed 寃곌낵 湲곕컲?쇰줈 Z/N/V 媛깆떊(寃곌낵??踰꾨┝)
 # - CMPI a, #imm
 #
-# - JMP label              ; 무조건 분기
+# - JMP label              ; 臾댁“嫄?遺꾧린
 # - BEQ/BNE                ; Z=1 / Z=0
 # - BMI/BPL                ; N=1 / N=0
 # - BVS/BVC                ; V=1 / V=0
-#   (하위호환) BCS/BCC     ; V=1 / V=0 로 해석
+#   (?섏쐞?명솚) BCS/BCC     ; V=1 / V=0 濡??댁꽍
 """
 
 def _wrap_s8(x: int) -> int:
@@ -87,18 +102,24 @@ class CPU:
         self.halted = False
         self.debug = debug
 
-        # 플래그: Zero / Negative / oVerflow / Carry
+        # ?뚮옒洹? Zero / Negative / oVerflow / Carry
         self.flags: Dict[str, int] = {"Z": 0, "N": 0, "V": 0, "C": 0}
         self._pc_overridden: bool = False
 
-        self.interactive = interactive                         # ← 스텝 실행 플래그
-        self._continue_run = False                             # ← 'c' 입력 시 계속 진행
-        self.use_isa = use_isa                                 # ← ISA 모드 사용 여부
+        self.interactive = interactive                         # ???ㅽ뀦 ?ㅽ뻾 ?뚮옒洹?        self._continue_run = False                             # ??'c' ?낅젰 ??怨꾩냽 吏꾪뻾
+        self.use_isa = use_isa                                 # ??ISA 紐⑤뱶 ?ъ슜 ?щ?
 
         # ISA instruction stream (when use_isa=True)
         self._isa: list[AsmInsn] = []
+        # Control-plane integration (LED-gated run loop)
+        # 湲곕낯媛?False: ?명꽣?숉떚釉?紐⑤뱶?먯꽌 肄섏넄 ?낅젰 ?곗꽑
+        self.cp_enabled: bool = False
+        self._trace_log: list[Dict[str, Any]] = []
+        # Background command reader for interactive mode
+        self._cmd_q: Queue[str] = Queue()
+        self._cmd_thread = None  # type: ignore[assignment]
 
-    # ---------- 외부 API ----------
+    # ---------- ?몃? API ----------
     def load_program(self, lines: List[str], *, debug: bool | None = None) -> None:
         dbg = self.debug if debug is None else bool(debug)
         if self.use_isa:
@@ -122,7 +143,7 @@ class CPU:
         self.flags["V"] = 0
         self.flags["C"] = 0
 
-        # 초기 플래그 상태를 LED에 1회 반영(Off 상태라도 바로 보이게)
+        # 珥덇린 ?뚮옒洹??곹깭瑜?LED??1??諛섏쁺(Off ?곹깭?쇰룄 諛붾줈 蹂댁씠寃?
         try:
             self._sync_flag_leds()
         except Exception:
@@ -285,7 +306,7 @@ class CPU:
             imm = int(arg8 if arg8 < 128 else arg8 - 256)
             _write_u8_to_group("SRC1", arg8)
             self._on_execute(f"MOVI {dst}, #{imm}")
-            # COPY → PACK
+            # COPY ??PACK
             ch = {}
             # Directly set via PACK pipeline
             self._clear_group("RES")
@@ -494,11 +515,19 @@ class CPU:
         return not self.halted
 
     def _maybe_pause(self) -> None:
-        """interactive 모드면, 한 연산 끝날 때 사용자 입력 대기.
-        [Enter]=한 스텝, 'c'=연속 실행, 'q'=즉시 종료"""
+        """interactive 紐⑤뱶硫? ???곗궛 ?앸궇 ???ъ슜???낅젰 ?湲?
+        [Enter]=???ㅽ뀦, 'c'=?곗냽 ?ㅽ뻾, 'q'=利됱떆 醫낅즺"""
+        # LED control-plane active? skip interactive blocking
+        if getattr(self, "cp_enabled", False):
+            return
         if not self.interactive:
             return
         if self._continue_run:
+            # 鍮꾩감?? 諛깃렇?쇱슫??紐낅졊 ??泥섎━ ??利됱떆 蹂듦?
+            try:
+                self._drain_cmd_queue()
+            except Exception:
+                pass
             return
         # Entering pause state: turn off stage indicators and show PAUSE
         try:
@@ -510,14 +539,18 @@ class CPU:
         except Exception:
             pass
         try:
-            s = input("[step] Enter=next | c=continue | q=quit > ").strip().lower()
+            s = input("[step] Enter=next | c/run=continue | p/pause=pause | h/halt=halt | ehalt | reset | s/step/instr | mi/micro | cont | trace on/off/mark | overlay alu/irpc/bus/service/none | q=quit > ").strip().lower()
         except EOFError:
             s = ""
-        if s == "c":
+        if s == "c" or s == "run":
             self._continue_run = True
             # Resume continuous run: show RUN (on)
             try:
                 run_on()
+            except Exception:
+                pass
+            try:
+                set_run_state("RUN")
             except Exception:
                 pass
         elif s == "q":
@@ -527,18 +560,276 @@ class CPU:
                 run_off()
             except Exception:
                 pass
+            try:
+                set_run_state("HALT")
+            except Exception:
+                pass
+        elif s == "pause" or s == "p":
+            self._continue_run = False
+            try:
+                run_off()
+            except Exception:
+                pass
+            try:
+                set_run_state("PAUSE")
+            except Exception:
+                pass
+        elif s == "halt" or s == "h":
+            self.halted = True
+            try:
+                run_off()
+            except Exception:
+                pass
+            try:
+                set_run_state("HALT")
+            except Exception:
+                pass
+        elif s == "ehalt":
+            self.halted = True
+            try:
+                set_esc_state("EHALT")
+            except Exception:
+                pass
+        elif s == "reset":
+            try:
+                set_esc_state("RESET")
+            except Exception:
+                pass
+            try:
+                self._soft_reset_visuals()
+            except Exception:
+                pass
+        elif s == "instr" or s == "step" or s == "s":
+            try:
+                set_step_mode("INSTR")
+            except Exception:
+                pass
+            try:
+                run_on()
+            except Exception:
+                pass
+        elif s == "micro" or s == "mi":
+            try:
+                set_step_mode("MICRO")
+            except Exception:
+                pass
+            try:
+                run_on()
+            except Exception:
+                pass
+        elif s == "cont":
+            try:
+                set_step_mode("CONT")
+            except Exception:
+                pass
+            self._continue_run = True
+            try:
+                run_on(); set_run_state("RUN")
+            except Exception:
+                pass
+        elif s.startswith("trace"):
+            try:
+                _, arg = (s + " ").split(" ", 1)
+                arg = arg.strip()
+            except Exception:
+                arg = ""
+            try:
+                if arg.startswith("on"):
+                    set_trace_state("ON")
+                elif arg.startswith("off"):
+                    set_trace_state("OFF")
+                elif arg.startswith("mark"):
+                    set_trace_state("MARK")
+            except Exception:
+                pass
+        elif s.startswith("overlay"):
+            try:
+                _, arg = (s + " ").split(" ", 1)
+                arg = arg.strip()
+            except Exception:
+                arg = ""
+            try:
+                if arg == "alu":
+                    set_overlay_mode("ALU")
+                elif arg == "irpc":
+                    set_overlay_mode("IRPC")
+                elif arg == "bus":
+                    set_overlay_mode("BUS")
+                elif arg == "service":
+                    set_overlay_mode("SERVICE")
+                else:
+                    set_overlay_mode("NONE")
+            except Exception:
+                pass
         else:
             # Single-step resume: turn RUN on; next pause will turn it off again
             try:
                 run_on()
             except Exception:
                 pass
+            try:
+                set_run_state("RUN")
+            except Exception:
+                pass
 
     def _sync_flag_leds(self) -> None:
-        """현재 Z/N/V 값을 지정된 키 LED에 반영"""
+        """?꾩옱 Z/N/V 媛믪쓣 吏?뺣맂 ??LED??諛섏쁺"""
         if hasattr(self.mem, "set_flag"):
             for k, led in FLAG_LABELS.items():
                 self.mem.set_flag(led, bool(self.flags.get(k, 0)))
+
+    def run_led(self) -> None:
+        """LED 而⑦듃濡??뚮젅?몄뿉 ?섑빐 寃뚯씠?낅릺???ㅽ뻾 猷⑦봽.
+        grave/esc/tab/caps/left_shift ??而щ윭瑜?二쇨린?곸쑝濡??먮룆?섏뿬
+        RUN/PAUSE/HALT/RESET/STEP/?쒕퉬???숈옉???섑뻾?쒕떎.
+        """
+        self._println("\n[RUN] Starting execution...")
+        try:
+            run_on()
+        except Exception:
+            pass
+        while True:
+            st: ControlStates = cp_poll()
+            # ESC ?곗꽑?쒖쐞 (E-HALT/RESET)
+            if st.esc == "EHALT":
+                self.halted = True
+                try:
+                    run_off()
+                except Exception:
+                    pass
+                break
+            if st.esc == "RESET":
+                self._soft_reset_visuals()
+                try:
+                    run_off()
+                except Exception:
+                    pass
+                time.sleep(0.02)
+                continue
+
+            # 二??곹깭(RUN/PAUSE/HALT/FAULT)
+            if st.run in ("HALT", "FAULT"):
+                self.halted = True
+                try:
+                    run_off()
+                except Exception:
+                    pass
+                break
+            if st.run == "PAUSE":
+                try:
+                    run_off()
+                except Exception:
+                    pass
+                try:
+                    cp_service(st)
+                except Exception:
+                    pass
+                time.sleep(0.02)
+                continue
+
+            # RUN ?곹깭: ?ㅽ뀦 紐⑤뱶???곕씪 ?섑뻾
+            cont = True
+            if st.step == "INSTR":
+                cont = self.step()
+                # Trace gate
+                try:
+                    if st.trace in ("ON", "MARK"):
+                        self._trace_log.append({
+                            "pc": int(self.pc.value),
+                            "flags": dict(self.flags),
+                            "marker": (st.trace == "MARK"),
+                        })
+                except Exception:
+                    pass
+                try:
+                    run_off()
+                except Exception:
+                    pass
+                try:
+                    cp_service(st)
+                except Exception:
+                    pass
+                if not cont:
+                    break
+                time.sleep(0.01)
+                continue
+            elif st.step == "MICRO":
+                # ?ㅼ젣 留덉씠?щ줈 ?ㅽ뀦? ?몄텧?섏뼱 ?덉? ?딆븘 ISA ?ㅽ뀦 1?뚮줈 ?泥?                cont = self.step()
+                try:
+                    if st.trace in ("ON", "MARK"):
+                        self._trace_log.append({
+                            "pc": int(self.pc.value),
+                            "flags": dict(self.flags),
+                            "marker": (st.trace == "MARK"),
+                        })
+                except Exception:
+                    pass
+                try:
+                    run_off()
+                except Exception:
+                    pass
+                try:
+                    cp_service(st)
+                except Exception:
+                    pass
+                if not cont:
+                    break
+                time.sleep(0.01)
+                continue
+            else:  # CONT
+                cont = self.step()
+                try:
+                    if st.trace in ("ON", "MARK"):
+                        self._trace_log.append({
+                            "pc": int(self.pc.value),
+                            "flags": dict(self.flags),
+                            "marker": (st.trace == "MARK"),
+                        })
+                except Exception:
+                    pass
+                try:
+                    cp_service(st)
+                except Exception:
+                    pass
+                if not cont:
+                    break
+
+        # 醫낅즺 泥섎━
+        try:
+            clear_stages()
+        except Exception:
+            pass
+        self._println("[RUN] Execution finished.\n")
+        try:
+            run_off()
+        except Exception:
+            pass
+
+    def _soft_reset_visuals(self) -> None:
+        """?꾨줈洹몃옩? ?좎???梨?PC/IR/Flags 諛??쒖떆瑜?珥덇린??"""
+        self.pc.reset()
+        self.halted = False
+        self.ir.clear()
+        self.flags["Z"] = 0
+        self.flags["N"] = 0
+        self.flags["V"] = 0
+        self.flags["C"] = 0
+        try:
+            self._sync_flag_leds()
+        except Exception:
+            pass
+        try:
+            clear_stages()
+        except Exception:
+            pass
+        try:
+            clear_ir()
+        except Exception:
+            pass
+        try:
+            clear_pc()
+        except Exception:
+            pass
 
     def run(self) -> None:
         self._println("\n[RUN] Starting execution...")
@@ -547,9 +838,15 @@ class CPU:
             run_on()
         except Exception:
             pass
+        # Start background command reader in interactive mode
+        try:
+            if self.interactive and not self.cp_enabled:
+                self._start_cmd_reader()
+        except Exception:
+            pass
         while self.step():
             pass
-        # 실행 종료 즉시 단계 표시 소등(WRITEBACK 포함)
+        # ?ㅽ뻾 醫낅즺 利됱떆 ?④퀎 ?쒖떆 ?뚮벑(WRITEBACK ?ы븿)
         try:
             clear_stages()
         except Exception:
@@ -572,8 +869,8 @@ class CPU:
         labels = self._group_labels(grp)
         u8 &= 0xFF
         width = len(labels)
-        # labels[-1]이 LSB가 되도록 역인덱싱
-        for i in range(width):  # i=0..7 -> 비트 i
+        # labels[-1]??LSB媛 ?섎룄濡???씤?깆떛
+        for i in range(width):  # i=0..7 -> 鍮꾪듃 i
             bit = (u8 >> i) & 1
             lab = labels[width - 1 - i]
             self.mem.set(lab, bit)
@@ -586,13 +883,160 @@ class CPU:
         labels = self._group_labels(grp)
         width = len(labels)
         val = 0
-        # labels[-1]이 LSB → 역인덱싱으로 읽어서 i번째 비트로
+        # labels[-1]??LSB ????씤?깆떛?쇰줈 ?쎌뼱??i踰덉㎏ 鍮꾪듃濡?
         for i in range(width):  # i=0..7
             lab = labels[width - 1 - i]
             val |= (int(self.mem.get(lab)) & 1) << i
         return val & 0xFF
 
-    # ---------- 내부 실행기 ----------
+    # ---------- ?대? ?ㅽ뻾湲?----------
+        # ---------- interactive helpers ----------
+    def _start_cmd_reader(self) -> None:
+        if self._cmd_thread is not None and self._cmd_thread.is_alive():
+            return
+        def _reader():
+            while not self.halted:
+                try:
+                    s = input("cmd> ").strip().lower()
+                except EOFError:
+                    break
+                except Exception:
+                    continue
+                try:
+                    self._cmd_q.put(s)
+                except Exception:
+                    pass
+        try:
+            th = threading.Thread(target=_reader, daemon=True)
+            th.start()
+            self._cmd_thread = th
+        except Exception:
+            self._cmd_thread = None
+
+    def _drain_cmd_queue(self) -> None:
+        while True:
+            try:
+                s = self._cmd_q.get_nowait()
+            except Empty:
+                break
+            try:
+                self._process_command_line(s)
+            except Exception:
+                pass
+
+    def _process_command_line(self, s: str) -> None:
+        s = (s or "").strip().lower()
+        if s == "":
+            try:
+                run_on(); set_run_state("RUN")
+            except Exception:
+                pass
+            return
+        if s in ("c", "run"):
+            self._continue_run = True
+            try:
+                run_on(); set_run_state("RUN")
+            except Exception:
+                pass
+            return
+        if s in ("q",):
+            self.halted = True
+            try:
+                run_off(); set_run_state("HALT")
+            except Exception:
+                pass
+            return
+        if s in ("pause", "p"):
+            self._continue_run = False
+            try:
+                run_off(); set_run_state("PAUSE")
+            except Exception:
+                pass
+            return
+        if s in ("halt", "h"):
+            self.halted = True
+            try:
+                run_off(); set_run_state("HALT")
+            except Exception:
+                pass
+            return
+        if s == "ehalt":
+            self.halted = True
+            try:
+                set_esc_state("EHALT")
+            except Exception:
+                pass
+            return
+        if s == "reset":
+            try:
+                set_esc_state("RESET")
+            except Exception:
+                pass
+            try:
+                self._soft_reset_visuals()
+            except Exception:
+                pass
+            return
+        if s in ("instr", "step", "s"):
+            try:
+                set_step_mode("INSTR"); run_on()
+            except Exception:
+                pass
+            return
+        if s in ("micro", "mi"):
+            try:
+                set_step_mode("MICRO"); run_on()
+            except Exception:
+                pass
+            return
+        if s == "cont":
+            try:
+                set_step_mode("CONT"); run_on(); set_run_state("RUN")
+            except Exception:
+                pass
+            self._continue_run = True
+            return
+        if s.startswith("trace"):
+            try:
+                _, arg = (s + " ").split(" ", 1)
+                arg = arg.strip()
+            except Exception:
+                arg = ""
+            try:
+                if arg.startswith("on"):
+                    set_trace_state("ON")
+                elif arg.startswith("off"):
+                    set_trace_state("OFF")
+                elif arg.startswith("mark"):
+                    set_trace_state("MARK")
+            except Exception:
+                pass
+            return
+        if s.startswith("overlay"):
+            try:
+                _, arg = (s + " ").split(" ", 1)
+                arg = arg.strip()
+            except Exception:
+                arg = ""
+            try:
+                if arg == "alu":
+                    set_overlay_mode("ALU")
+                elif arg == "irpc":
+                    set_overlay_mode("IRPC")
+                elif arg == "bus":
+                    set_overlay_mode("BUS")
+                elif arg == "service":
+                    set_overlay_mode("SERVICE")
+                else:
+                    set_overlay_mode("NONE")
+            except Exception:
+                pass
+            return
+        try:
+            run_on(); set_run_state("RUN")
+        except Exception:
+            pass
+
     def _exec_one(self, op: str, args: tuple[Any, ...]) -> Dict[str, int]:
         ch: Dict[str, int] = {}
 
@@ -643,21 +1087,21 @@ class CPU:
             (var,) = args
             v = self.mem.get(str(var))         # -128..127
             self._write_u8_to_group("SRC1", v & 0xFF)
-            self._on_execute(f"UNPACK1 {var} → SRC1")
+            self._on_execute(f"UNPACK1 {var} -> SRC1")
             return ch
 
         if op == "UNPACK2":
             (var,) = args
             v = self.mem.get(str(var))
             self._write_u8_to_group("SRC2", v & 0xFF)
-            self._on_execute(f"UNPACK2 {var} → SRC2")
+            self._on_execute(f"UNPACK2 {var} -> SRC2")
             return ch
 
         if op == "UNPACK":
             var, grp = args
             v = self.mem.get(str(var))
             self._write_u8_to_group(str(grp), v & 0xFF)
-            self._on_execute(f"UNPACK {var} → {grp}")
+            self._on_execute(f"UNPACK {var} -> {grp}")
             return ch
 
         # LOADI8_BITS
@@ -692,7 +1136,7 @@ class CPU:
             self._on_execute(f"COPYBITS {dst}, {src}")
             return ch
 
-        # --- ADD/ADDI (signed: Z/N/V 갱신) ---
+        # --- ADD/ADDI (signed: Z/N/V 媛깆떊) ---
         if op == "ADDI":
             dst, imm = args
             dst_name = str(dst)
@@ -757,10 +1201,10 @@ class CPU:
             # Unsigned carry out
             self.flags["C"] = 1 if (a_u8 + b_u8) > 0xFF else 0
             _set_zn_from_val(self.flags, v)
-            self._on_execute("ADD8 (via LUT) ; RES ← SRC1 + SRC2")
+            self._on_execute("ADD8 (via LUT) ; RES -> SRC1 + SRC2")
             return ch
 
-        # --- SUB/SUBI (signed: Z/N/V 갱신) ---
+        # --- SUB/SUBI (signed: Z/N/V 媛깆떊) ---
         if op == "SUBI":
             dst, imm = args
             dst_name = str(dst)
@@ -780,7 +1224,7 @@ class CPU:
             # Carry as 'no borrow' for subtraction
             self.flags["C"] = 1 if _to_u8(a) >= _to_u8(b) else 0
             _set_zn_from_val(self.flags, v)
-            self._on_execute(f"SUBI {dst}, #{imm} ; via LUT {dst_name}:{a}-{b}→{v} | Z={self.flags['Z']} N={self.flags['N']} V={self.flags['V']}")
+            self._on_execute(f"SUBI {dst}, #{imm} ; via LUT {dst_name}:{a}-{b}->{v} | Z={self.flags['Z']} N={self.flags['N']} V={self.flags['V']}")
             ch[dst_name] = v
             return ch
 
@@ -804,7 +1248,7 @@ class CPU:
             # Carry as 'no borrow' for subtraction
             self.flags["C"] = 1 if _to_u8(a) >= _to_u8(b) else 0
             _set_zn_from_val(self.flags, v)
-            self._on_execute(f"SUB  {dst}, {src} ; via LUT {dst_name}:{a}-{b}→{v} | Z={self.flags['Z']} N={self.flags['N']} V={self.flags['V']}")
+            self._on_execute(f"SUB  {dst}, {src} ; via LUT {dst_name}:{a}-{b}->{v} | Z={self.flags['Z']} N={self.flags['N']} V={self.flags['V']}")
             ch[dst_name] = v
             return ch
 
@@ -821,7 +1265,7 @@ class CPU:
             # Carry as 'no borrow'
             self.flags["C"] = 1 if a_u8 >= b_u8 else 0
             _set_zn_from_val(self.flags, v)
-            self._on_execute("SUB8 (via LUT) ; RES ← SRC1 - SRC2")
+            self._on_execute("SUB8 (via LUT) ; RES -> SRC1 - SRC2")
             return ch
 
         if op == "PACK":
@@ -830,10 +1274,10 @@ class CPU:
             v = u8 if u8 < 128 else u8 - 256
             self.mem.set(str(var), v)
             ch[str(var)] = v
-            self._on_execute(f"PACK {var} ← RES ({v})")
+            self._on_execute(f"PACK {var} <- RES ({v})")
             return ch
 
-        # --- 비트 연산 (Z/N 갱신, V=0) ---
+        # --- 鍮꾪듃 ?곗궛 (Z/N 媛깆떊, V=0) ---
         if op in ("AND", "OR", "XOR"):
             dst, src = args
             dst_name, src_name = str(dst), str(src)
@@ -855,11 +1299,11 @@ class CPU:
             self.flags["V"] = 0
             _set_zn_from_val(self.flags, v)
             op_symbol = {'AND':'&', 'OR':'|', 'XOR':'^'}[op]
-            self._on_execute(f"{op:<4} {dst}, {src} ; via LUT {dst_name}:{a}{op_symbol}{b}→{v} | Z={self.flags['Z']} N={self.flags['N']}")
+            self._on_execute(f"{op:<4} {dst}, {src} ; via LUT {dst_name}:{a}{op_symbol}{b}->{v} | Z={self.flags['Z']} N={self.flags['N']}")
             ch[dst_name] = v
             return ch
 
-        # --- 시프트 ---
+        # --- ?쒗봽??---
         if op == "SHL":
             dst, = args
             dst_name = str(dst)
@@ -873,7 +1317,7 @@ class CPU:
             
             # Carry out from MSB before shift
             self.flags["C"] = 1 if (_to_u8(a) & 0x80) else 0
-            # SHL overflow: 최상위 비트 변화 여부로 판단
+            # SHL overflow: 理쒖긽??鍮꾪듃 蹂???щ?濡??먮떒
             ov = 1 if (_sign_bit(a) != _sign_bit(v)) else 0
             self.mem.set(dst_name, v)
             self.flags["V"] = ov
@@ -896,13 +1340,13 @@ class CPU:
 
             # Carry out from LSB
             self.flags["C"] = 1 if (_to_u8(a) & 0x01) else 0
-            self.flags["V"] = 0 # ASR은 오버플로우 없음
+            self.flags["V"] = 0 # ASR? ?ㅻ쾭?뚮줈???놁쓬
             _set_zn_from_val(self.flags, v)
             self._on_execute(f"SHR  {dst} ; via LUT {a:4d}>>1 -> {v:4d} | V=0 Z={self.flags['Z']} N={self.flags['N']}")
             ch[dst_name] = v
             return ch
 
-        # --- 비교/분기 ---
+        # --- 鍮꾧탳/遺꾧린 ---
         if op == "CMP" or op == "CMPI":
             a_name, b_arg = args
             a = self.mem.get(str(a_name))
@@ -922,7 +1366,7 @@ class CPU:
             _set_zn_from_val(self.flags, v)
             
             b_str = f"#{b}" if op == "CMPI" else str(b_arg)
-            self._on_execute(f"{op:<4} {a_name}, {b_str} ; via LUT ({a}-{b}) → Z={self.flags['Z']} N={self.flags['N']} V={self.flags['V']}")
+            self._on_execute(f"{op:<4} {a_name}, {b_str} ; via LUT ({a}-{b})  | Z={self.flags['Z']} N={self.flags['N']} V={self.flags['V']}")
             return ch
 
         if op == "JMP":
@@ -934,7 +1378,7 @@ class CPU:
                 return ch
             self.pc.value = addr
             self._pc_overridden = True
-            self._on_execute(f"JMP  {label} ; PC←{addr:02d}")
+            self._on_execute(f"JMP  {label} ; PC={addr:02d}")
             return ch
 
         if op == "BEQ":
@@ -947,9 +1391,9 @@ class CPU:
                     return ch
                 self.pc.value = addr
                 self._pc_overridden = True
-                self._on_execute(f"BEQ  {label} ; Z=1 → PC←{addr:02d}")
+                self._on_execute(f"BEQ  {label} ; Z=1 ??PC={addr:02d}")
             else:
-                self._on_execute(f"BEQ  {label} ; Z=0 → no-branch")
+                self._on_execute(f"BEQ  {label} ; Z=0  | no-branch")
             return ch
 
         if op == "BNE":
@@ -962,9 +1406,9 @@ class CPU:
                     return ch
                 self.pc.value = addr
                 self._pc_overridden = True
-                self._on_execute(f"BNE  {label} ; Z=0 → PC←{addr:02d}")
+                self._on_execute(f"BNE  {label} ; Z=0 ??PC={addr:02d}")
             else:
-                self._on_execute(f"BNE  {label} ; Z=1 → no-branch")
+                self._on_execute(f"BNE  {label} ; Z=1  | no-branch")
             return ch
 
         if op == "BMI":
@@ -977,9 +1421,9 @@ class CPU:
                     return ch
                 self.pc.value = addr
                 self._pc_overridden = True
-                self._on_execute(f"BMI  {label} ; N=1 → PC←{addr:02d}")
+                self._on_execute(f"BMI  {label} ; N=1 ??PC={addr:02d}")
             else:
-                self._on_execute(f"BMI  {label} ; N=0 → no-branch")
+                self._on_execute(f"BMI  {label} ; N=0  | no-branch")
             return ch
 
         if op == "BPL":
@@ -992,9 +1436,9 @@ class CPU:
                     return ch
                 self.pc.value = addr
                 self._pc_overridden = True
-                self._on_execute(f"BPL  {label} ; N=0 → PC←{addr:02d}")
+                self._on_execute(f"BPL  {label} ; N=0 ??PC={addr:02d}")
             else:
-                self._on_execute(f"BPL  {label} ; N=1 → no-branch")
+                self._on_execute(f"BPL  {label} ; N=1  | no-branch")
             return ch
 
         # NEW: BVS/BVC
@@ -1008,9 +1452,9 @@ class CPU:
                     return ch
                 self.pc.value = addr
                 self._pc_overridden = True
-                self._on_execute(f"BVS  {label} ; V=1 → PC←{addr:02d}")
+                self._on_execute(f"BVS  {label} ; V=1 ??PC={addr:02d}")
             else:
-                self._on_execute(f"BVS  {label} ; V=0 → no-branch")
+                self._on_execute(f"BVS  {label} ; V=0  | no-branch")
             return ch
 
         if op == "BVC":
@@ -1023,12 +1467,12 @@ class CPU:
                     return ch
                 self.pc.value = addr
                 self._pc_overridden = True
-                self._on_execute(f"BVC  {label} ; V=0 → PC←{addr:02d}")
+                self._on_execute(f"BVC  {label} ; V=0 ??PC={addr:02d}")
             else:
-                self._on_execute(f"BVC  {label} ; V=1 → no-branch")
+                self._on_execute(f"BVC  {label} ; V=1  | no-branch")
             return ch
 
-        # 하위 호환: BCS/BCC → V 사용
+        # ?섏쐞 ?명솚: BCS/BCC ??V ?ъ슜
         if op == "BCS":
             label = str(args[0])
             if self.flags.get("V", 0) == 1:
@@ -1039,9 +1483,9 @@ class CPU:
                     return ch
                 self.pc.value = addr
                 self._pc_overridden = True
-                self._on_execute(f"BCS  {label} ; (alias V=1) → PC←{addr:02d}")
+                self._on_execute(f"BCS  {label} ; (alias V=1) ??PC={addr:02d}")
             else:
-                self._on_execute(f"BCS  {label} ; V=0 → no-branch")
+                self._on_execute(f"BCS  {label} ; V=0  | no-branch")
             return ch
 
         if op == "BCC":
@@ -1054,12 +1498,12 @@ class CPU:
                     return ch
                 self.pc.value = addr
                 self._pc_overridden = True
-                self._on_execute(f"BCC  {label} ; (alias V=0) → PC←{addr:02d}")
+                self._on_execute(f"BCC  {label} ; (alias V=0) ??PC={addr:02d}")
             else:
-                self._on_execute(f"BCC  {label} ; V=1 → no-branch")
+                self._on_execute(f"BCC  {label} ; V=1  | no-branch")
             return ch
 
-        # 정의 안 된 op
+        # ?뺤쓽 ????op
         self._on_execute(f"(unknown op) {op} {args}")
         return ch
 
@@ -1067,9 +1511,9 @@ class CPU:
         addr = self.prog.get_label_addr(name)
         return addr
 
-    # ---------- 콘솔 훅 ----------
+    # ---------- 肄섏넄 ??----------
     def _on_fetch(self, text: str) -> None:
-        # Stage: FETCH (비동기 표시)
+        # Stage: FETCH (鍮꾨룞湲??쒖떆)
         try:
             post_stage("FETCH")
         except Exception:
@@ -1102,16 +1546,15 @@ class CPU:
 
     def _on_decode(self, decoded: Tuple[str, tuple[Any, ...]]) -> None:
         op, args = decoded
-        # Stage: DECODE (비동기 표시)
+        # Stage: DECODE (鍮꾨룞湲??쒖떆)
         try:
             post_stage("DECODE")
         except Exception:
             pass
         self._println(f"[DECODE] {op} {args}")
-        # IR는 FETCH 단계에서 고수준 라인 기준으로 이미 표시함
-
+        # IR??FETCH ?④퀎?먯꽌 怨좎닔以 ?쇱씤 湲곗??쇰줈 ?대? ?쒖떆??
     def _on_execute(self, desc: str) -> None:
-        # Stage: EXECUTE (비동기 표시)
+        # Stage: EXECUTE (鍮꾨룞湲??쒖떆)
         try:
             post_stage("EXECUTE")
         except Exception:
@@ -1121,14 +1564,14 @@ class CPU:
     def _on_writeback(self, changes: Dict[str, int]) -> None:
         if changes:
             ch = ", ".join(f"{k}={v:4d}" for k, v in changes.items())
-            # Stage: WRITEBACK (비동기 표시)
+            # Stage: WRITEBACK (鍮꾨룞湲??쒖떆)
             try:
                 post_stage("WRITEBACK")
             except Exception:
                 pass
             self._println(f"[WB]     {ch}")
         else:
-            # Stage: WRITEBACK (비동기 표시: 변경 없어도 동일)
+            # Stage: WRITEBACK (鍮꾨룞湲??쒖떆: 蹂寃??놁뼱???숈씪)
             try:
                 post_stage("WRITEBACK")
             except Exception:
@@ -1164,3 +1607,5 @@ class CPU:
     def _println(self, s: str) -> None:
         if self.debug:
             print(s)
+
+

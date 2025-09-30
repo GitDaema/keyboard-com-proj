@@ -1,13 +1,16 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
-OpenRGB 서버(127.0.0.1:6742)에 연결해 ESC 키만 제어하는 예제.
-- 첫 실행 시 인덱스/라벨 흔들림 방지를 위해: direct 모드 전환 → 동기화 → 전체 올블랙 초기화
-- 종료 시 세션 정리(client.disconnect)
+OpenRGB 서버(127.0.0.1:6742)에 연결하여 키보드 LED를 초기화하고,
+인터랙티브 모드로 데모 CPU를 실행하는 진입점.
 
-필수:
-1) OpenRGB가 --server로 떠 있어야 함(런 스크립트가 자동 처리)
-2) iCUE / Razer Synapse 등은 종료
-3) keyboard_map.RGBLabelController 사용 (라벨 → LED 인덱스 매핑)
+- 실행 전: 장치를 direct 모드로 전환하고 전체 LED를 블랙으로 초기화
+- 실행 중: 콘솔에서 Enter(한 스텝) / c(연속) / q(종료) 및 확장 명령으로 제어
+- 종료 시: 모든 LED 클리어 후 OpenRGB 연결 해제
+
+필수 사항:
+1) OpenRGB를 --server 모드로 실행(이 스크립트가 자동 연결)
+2) iCUE / Razer Synapse 등 벤더 소프트웨어는 종료
+3) keyboard_map.RGBLabelController 사용(라벨↔LED 인덱스 매핑)
 """
 
 import time
@@ -17,6 +20,7 @@ import utils.keyboard_presets as kp
 import utils.color_presets as cp
 from sim.cpu import CPU
 from utils.run_pause_indicator import run_off
+from utils.control_plane import init_default_panel
 from sim.data_memory_rgb_visual import DataMemoryRGBVisual
 from utils.bus import BusInterface, BusMemory
 from utils.ir_indicator import calibrate_ir
@@ -32,7 +36,7 @@ def bitgroup_test(n: int):
     time.sleep(0.6)
     # set_group_value(kp.BYTE_A, n, on_color=cp.GREEN, off_color=cp.DARK_RED, debug = True)
     # val, bits, on_labels = get_group_value(BYTE_A, debug=True)
-    # print("[CHECK] value=", val, "bits(LSB→)=", bits, "on=", on_labels)
+    # print("[CHECK] value=", val, "bits(LSB->MSB)=", bits, "on=", on_labels)
     # input()
 
 def main():
@@ -40,53 +44,52 @@ def main():
         connect()
         time.sleep(0.6)
         init_all_keys()
-        # Show PAUSE while waiting to start
+        # 시작 대기 동안 PAUSE 표시
         try:
             run_off()
+        except Exception:
+            pass
+        try:
+            init_default_panel()
         except Exception:
             pass
         print("[INFO] All keys ready. Press Enter to start.")
         input()
 
-        # LED 메모리: 다중 샘플로 안정성 강화 (지연은 0~5ms 수준 권장)
+        # LED 메모리 I/O 샘플 설정(지연 0~5ms 권장)
         mem_core = DataMemoryRGBVisual(binary_labels=kp.BINARY_COLORS, samples=3, sample_delay_ms=0, debug=False)
         bus = BusInterface(ack_mode="internal", ack_pulse_ms=12, settle_ms=8, ack_timeout_ms=200)
         mem = BusMemory(mem_core, bus, only_variable_keys=True)
-        # 1) CPU 생성: ISA 모드 + 자동 실행(인터랙티브 끔)
+        # 1) CPU 구성: ISA 모드 + 인터랙티브 실행(콘솔 입력으로 스텝/제어)
         cpu = CPU(debug=True, mem=mem, interactive=True, use_isa=True)
 
-        # 2) 프로그램: 상태가 전부 “불빛”에 저장됨
-        #
-        # 분기문 작성법(멀티라인 블록):
-        # - 문법: IF <lhs> <op> <rhs> THEN ... [ELSE ...] END
-        # - 지원 비교 연산자(서명 8비트 기준): ==, !=, <, >, <=, >=
-        # - 즉시값은 #10, #0x1F, #-3 또는 # 없이 10, 0x1F, -3 모두 가능
-        # - THEN은 같은 줄에 반드시 위치해야 하며, 블록은 END(또는 ENDIF)로 닫아야 합니다.
-        # - ELSE는 선택사항입니다.
-        # - 내부적으로 CMP/CMPI + 분기(BEQ/BNE/BMI/BPL/BVS/BVC)로 전개됩니다.
-        # - 자동 생성 라벨(__IF{n}_*)이 생기므로 같은 이름의 라벨을 직접 사용하지 마세요.
-        # - 변수 이름은 utils/keyboard_presets.py의 VARIABLE_KEYS만 사용하세요:
-        #   {'q','w','e','r','a','s','d','z','x'}
+        # 2) 프로그램: 상태가 “키보드 불빛”에 매핑되도록 작성된 샘플
+        #    - IF/THEN/ELSE/END 블록 포함(전처리로 단순화)
+        #    - 비교/산술/분기: ==, !=, <, >, <=, >=
+        #    - 즉시값 예: #10, #0x1F, #-3 (10진/16진/음수 지원)
+        #    - 내부적으로 CMPI/분기(BEQ/BNE/BMI/BPL/BVS/BVC)로 변환
+        #    - 변수 이름은 utils/keyboard_presets.py의 VARIABLE_KEYS만 사용
+        #      {'q','w','e','r','a','s','d','z','x'}
         program = [
-            # 데모 프로그램: 분기/루프 포함 10줄 이상
+            # 데모 프로그램: 분기/루프 포함 10여 줄
             # 목표:
             # 1) a의 절대값 계산 (IF/THEN/ELSE/END 사용)
-            # 2) a가 x와 같은지 비교하여 d에 1/0 저장
-            # 3) a를 0이 될 때까지 감소시키는 루프 (레이블+분기)
+            # 2) a가 x와 같은지 비교하여 d에 1/0 기록
+            # 3) a가 5가 될 때까지 1씩 감소(분기)
 
             "start:",
-            "a = -7",          # 초기값 (MOVI 테스트)
+            "a = -7",          # 초기값 설정(MOVI)
             "x = 5",           # 비교 대상
             "s = 0",           # 임시/플래그 용도
 
-            # SHIFT 테스트: s <- a; SHL/SHR 수행(ISA: SHIFT)
+            # SHIFT 테스트: s <- a; SHL/SHR 실행(ISA: SHIFT)
             "s = a",
             "SHL s",
             "SHR s",
 
-            # a < 0 이면 a = -a (절대값)
+            # a < 0 이면 a = -a (절대값 만들기)
             "IF a < #0 THEN",
-            "    a = 0 - a",   # NEG 테스트(ISA: NEG)
+            "    a = 0 - a",   # NEG 동작과 동일(ISA: NEG)
             "END",
 
             # a == x 이면 d=1, 아니면 d=0
@@ -107,12 +110,12 @@ def main():
             "HALT",
         ]
 
-        # try: # IR 복호화 정확도를 높이기 위해, 선택적 간단 캘리브레이션(수 초 이내)
+        # try: # IR 복호 정확도 향상을 위해, 간단 캘리브레이션(선택사항)
         #     calibrate_ir(samples=2, settle_ms=8, debug=False)
         # except Exception:
         #     pass
 
-        # try: # 어셈블 결과 간단 덤프(실행용 ISA 기준)
+        # try: # 어셈블 결과 간단 출력(실행은 ISA 기준)
         #     isa = assemble_program(program, debug=False)
         #     print("\n[ASM LIST]")
         #     for i, insn in enumerate(isa):
@@ -126,16 +129,17 @@ def main():
 
         # 실행
         cpu.load_program(program, debug=True)
+        # 인터랙티브: Enter=스텝, c=연속, q=종료 + 확장 명령(cmd)
         cpu.run()
 
-        # 최종 값 확인(빠른 요약)
+        # 최종 확인(빠른 요약)
         try:
             va = mem.get('a'); vx = mem.get('x'); vd = mem.get('d'); vs = mem.get('s')
             print(f"[RESULT] a={va} x={vx} d={vd} s={vs}")
         except Exception:
             pass
         
-        # 종료 전 잠시 대기(옵션)
+        # 종료 전 일시 정지(콘솔 확인용)
         input()
         
     finally:

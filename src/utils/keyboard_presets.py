@@ -174,6 +174,19 @@ RUN_PAUSE_ON  = (0, 255, 0)  # Green
 RUN_PAUSE_OFF = (0,   0, 0)  # Black
 
 # ---------------------------------------------------------------------
+# Control-plane key labels (used as input switches via LED readback)
+#   - ESC: Emergency Halt / Reset
+#   - TAB: Step mode selector (continuous / instruction-step / micro-step)
+#   - CAPS_LOCK: Trace gate / marker
+#   - LEFT_SHIFT: Overlay/Service selector
+# These are labels resolved by keyboard_map.ALIAS and exist in the map JSON.
+# ---------------------------------------------------------------------
+KEY_ESC_LABEL       = "esc"
+KEY_TAB_LABEL       = "tab"
+KEY_CAPS_LABEL      = "caps_lock"
+KEY_LSHIFT_LABEL    = "left_shift"
+
+# ---------------------------------------------------------------------
 # Carry Flag (C) persistent indicator
 # ---------------------------------------------------------------------
 # 백스페이스바 LED를 상주 Carry 플래그로 사용
