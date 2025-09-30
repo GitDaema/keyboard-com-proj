@@ -133,11 +133,11 @@ def main():
         cpu.run()
 
         # 최종 확인(빠른 요약)
-        try:
-            va = mem.get('a'); vx = mem.get('x'); vd = mem.get('d'); vs = mem.get('s')
-            print(f"[RESULT] a={va} x={vx} d={vd} s={vs}")
-        except Exception:
-            pass
+        # try:
+        #     va = mem.get('a'); vx = mem.get('x'); vd = mem.get('d'); vs = mem.get('s')
+        #     print(f"[RESULT] a={va} x={vx} d={vd} s={vs}")
+        # except Exception:
+        #     pass
         
         # 종료 전 일시 정지(콘솔 확인용)
         input()

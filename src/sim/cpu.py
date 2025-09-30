@@ -538,9 +538,37 @@ class CPU:
             run_off()
         except Exception:
             pass
+        # Prompt via stdout and read from the background command queue to avoid
+        # nested input() calls fighting for stdin. This makes the prompt appear
+        # immediately without needing an extra Enter press.
+        prompt = (
+            "[step] Enter=next | c/run=continue | p/pause=pause | h/halt=halt | ehalt | reset | "
+            "s/step/instr | mi/micro | cont | trace on/off/mark | overlay alu/irpc/bus/service/none | q=quit > "
+        )
         try:
-            s = input("[step] Enter=next | c/run=continue | p/pause=pause | h/halt=halt | ehalt | reset | s/step/instr | mi/micro | cont | trace on/off/mark | overlay alu/irpc/bus/service/none | q=quit > ").strip().lower()
-        except EOFError:
+            print(prompt, end="", flush=True)
+        except Exception:
+            pass
+        # Ensure background reader is running
+        try:
+            if self._cmd_thread is None or not self._cmd_thread.is_alive():
+                self._start_cmd_reader()
+        except Exception:
+            pass
+        s = ""
+        try:
+            while True:
+                try:
+                    s = self._cmd_q.get(timeout=0.05)  # type: ignore[attr-defined]
+                    s = (s or "").strip().lower()
+                    break
+                except Empty:
+                    if self.halted:
+                        s = ""
+                        break
+                    # keep waiting
+                    pass
+        except Exception:
             s = ""
         if s == "c" or s == "run":
             self._continue_run = True
@@ -897,7 +925,9 @@ class CPU:
         def _reader():
             while not self.halted:
                 try:
-                    s = input("cmd> ").strip().lower()
+                    # No prompt here; the main thread prints the appropriate
+                    # step/command prompt and we just read lines.
+                    s = input().strip().lower()
                 except EOFError:
                     break
                 except Exception:
