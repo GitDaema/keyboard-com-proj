@@ -1,7 +1,7 @@
 인터랙티브 제어 명령 안내 (키보드 불빛 연동)
 
 프롬프트 형식:
-[step] Enter=next | c/run=continue | p/pause=pause | h/halt=halt | ehalt | reset | s/step/instr | mi/micro | cont | trace on/off/mark | overlay alu/irpc/bus/service/none | q=quit >
+[step] Enter=next | c/run=continue | p/pause=pause | h/halt=halt | ehalt | reset | reset hard | reset bus | s/step/instr | mi/micro | cont | trace on/off/mark | overlay alu/irpc/bus/service/none | q=quit >
 
 기본 개념
 - 콘솔에서 입력하는 명령은 ‘패널 스위치’를 직접 조작하는 것과 동일합니다.
@@ -33,10 +33,27 @@
 6) ehalt → 비상정지(E‑HALT)
    - 즉시 종료하되, esc 키 LED를 빨강(E‑HALT)으로 점등하여 비상상태를 표시합니다.
 
-7) reset → 리셋(reset)
+7) reset → 리셋(reset, 소프트/웜)
    - 내부 상태(PC/IR/플래그/표시)를 초기화하고 일시정지 상태로 대기합니다.
    - LED: esc=파랑(RESET)으로 표시 후 대기. 사용자가 run을 입력하면 다시 실행.
    - 예시: reset → 초기화 → run → 처음부터 다시 진행
+
+7-1) reset hard → 하드(콜드/파워온) 리셋
+   - 초기화 범위 = reset +
+     • 변수/메모리(q…x) 논리값은 0으로 초기화하되, 표시는 OFF(불 꺼짐)으로 정리
+     • 트레이스 버퍼/마커 비움, 오버레이/서비스/스텝 모드 기본값으로 복귀
+     • (선택) IR 캘리브레이션 재요청은 코드 내 옵션으로 처리
+   - 보존 범위
+     • 프로그램 코드/어셈블 결과(소스) 유지
+   - 예시: reset hard → 모든 상태 초기화 → run으로 완전 클린 스타트
+
+7-2) reset bus → 버스/주변 리셋
+   - 초기화 범위
+     • 진행 중인 LED‑버스 트랜잭션 강제 종료
+     • ADDR_VALID/RD/WR/ACK OFF(유휴)로 정리
+   - 보존 범위
+     • PC/IR/플래그/변수/ALU 래치 유지
+   - 예시: 메모리/IO 핸드셰이크가 꼬인 경우, 시스템 전체 정지 없이 버스만 복구
 
 8) s, step 또는 instr → 명령 단위 스텝 모드(instruction-step)
    - 다음 ‘Enter’ 입력 또는 즉시 스텝 트리거 시 한 명령만 실행하고 자동으로 멈춥니다.
@@ -51,16 +68,18 @@
    - 스텝 모드를 연속 모드로 전환하고, run 상태로 이어서 실행합니다.
    - LED: tab=꺼짐(CONT), grave=초록(RUN).
 
-11) trace on/off/mark → 트레이스 게이트/마커
-   - on: caps_lock=시안(TRACE ON)으로 표시.
-   - off: caps_lock=꺼짐(TRACE OFF)으로 표시.
-   - mark: caps_lock=노랑(MARK)으로 표시.
-   - 현재 인터랙티브(run) 경로에서는 LED 표시 중심입니다(로그 파일 저장은 추후 확장 가능).
+11) trace on/off/mark → 트레이스 게이트/마커(+ run_led에서는 워치포인트)
+   - on: caps_lock=시안(TRACE ON). run_led에서는 READ 워치 활성(변수 읽기 시 정지).
+   - off: caps_lock=꺼짐(TRACE OFF). run_led에서는 워치 비활성.
+   - mark: caps_lock=노랑(MARK). run_led에서는 다음 1회 기록에 마커 + WRITE 워치 활성(변수 쓰기 시 정지).
+   - 참고: run 모드에서는 ‘표시/기록 게이트’ 중심, run_led 모드에서는 아래 “LED 패널 모드”의 하드웨어형 기능이 함께 동작합니다.
 
-12) overlay alu/irpc/bus/service/none → 오버레이/서비스 표시
-   - alu: left_shift=노랑(ALU 뷰), irpc: 파랑(IR/PC), bus: 보라(BUS), none: 끔.
-   - service: left_shift=시안(SERVICE). 현재 인터랙티브 경로에서는 LED 표시 중심이며,
-     IR 보정(calibrate_ir) 자동 실행은 LED 게이팅(run_led) 경로에서 동작합니다.
+12) overlay alu/irpc/bus/service/none → 오버레이/서비스(+ run_led에서는 주소공간/뱅크 선택)
+   - alu: left_shift=노랑. run_led에서는 DATA1(대안 데이터 뱅크) 감시/브레이크 대상.
+   - irpc: left_shift=파랑. run_led에서는 PROG(IR/PC/분기) 감시/브레이크 대상.
+   - bus: left_shift=보라. run_led에서는 IO 공간 감시(향후 확장) 대상.
+   - none: left_shift=꺼짐. run_led에서는 DATA0(기본 데이터 뱅크) 감시/브레이크 대상.
+   - service: left_shift=시안(SERVICE). PAUSE 상태에서 IR 보정(calibrate_ir) 1회 실행(쿨다운).
 
 상황별 예시
 - 단일 스텝 디버깅
@@ -83,7 +102,26 @@
 - 연속 실행 중에도 cmd>에 명령을 입력하면 즉시 반영됩니다(백그라운드 리더/큐).
 - run_led(LED 게이팅) 모드에서는 일부 동작(서비스/보정, 트레이스 기록)이 더 자동화됩니다.
 
-reset 동작 재정의(설계, 적용 예정)
+LED 패널 모드(run_led): 하드웨어형 기능(입력 신호 A → 출력 신호 B)
+- tab(스텝 모드 LED) = 브레이크 모드
+  • CONT(꺼짐): 브레이크 없음
+  • INSTR(흰): BRANCH 브레이크(분기/점프/비교 시 즉시 정지)
+  • MICRO(분홍): WRITE 브레이크(변수 쓰기 발생 시 즉시 정지)
+  • 로그 예: [BRK] BRANCH/JMP taken -> HALT / [BRK] WRITE break at var 'a' -> HALT
+- caps_lock(트레이스 LED) = 워치포인트 게이트
+  • OFF: 워치 없음
+  • ON(시안): READ 워치(변수 읽기 시 정지)
+  • MARK(노랑): 다음 1회 기록에 마커 + WRITE 워치(변수 쓰기 시 정지)
+  • 로그 예: [WATCH] READ hit at var 'x' -> HALT / [WATCH] WRITE hit at var 'd' -> HALT
+- left_shift(오버레이 LED) = 주소공간/뱅크 선택(감시/브레이크 대상 필터)
+  • NONE(꺼짐)=DATA0, ALU(노랑)=DATA1, IRPC(파랑)=PROG, BUS(보라)=IO, SERVICE(시안)=보정 1회
+
+빠른 테스트(run_led 권장)
+1) BRANCH 브레이크: s(INSTR) → overlay irpc → run/Enter → 분기/점프 순간 [BRK] 로그와 함께 정지
+2) WRITE 브레이크: mi(MICRO) → overlay none → run/Enter → 변수 쓰기 순간 [BRK] 로그와 함께 정지
+3) 워치포인트: trace on(READ) 또는 trace mark(WRITE) → 해당 접근 시 [WATCH] 로그와 함께 정지
+
+reset 동작(적용됨)
 - 목적: 실제 하드웨어의 리셋 모델을 충실히 따르면서, LED만으로도 리셋 의미를 명확히 체감
 
 1) reset (웜/소프트 리셋)
@@ -104,8 +142,8 @@ reset 동작 재정의(설계, 적용 예정)
 
 2) reset hard (콜드/파워온 리셋)
    - 초기화 범위 = 웜 리셋 +
-     • 변수/메모리(q…x) 0으로 초기화
-     • 트레이스 버퍼/마커, 오버레이/서비스 상태 초기화
+     • 변수/메모리(q…x) 논리값은 0, 표시(LED)는 OFF(불 꺼짐)으로 정리
+     • 트레이스 버퍼/마커, 오버레이/서비스/스텝 상태 초기화
      • (선택) IR 캘리브레이션 재요청
    - 보존 범위
      • 프로그램 코드/어셈블 결과(소스)는 유지
@@ -117,12 +155,11 @@ reset 동작 재정의(설계, 적용 예정)
 3) reset bus (버스/주변 리셋)
    - 초기화 범위
      • 진행 중인 LED‑버스 트랜잭션 강제 종료
-     • ADDR_VALID/RD/WR/ACK OFF, 버스 타임아웃/에러 래치 해제
+     • ADDR_VALID/RD/WR/ACK OFF, 버스 라인 유휴화
    - 보존 범위
      • PC/IR/플래그/변수/ALU 래치 유지
    - 예시
      • 메모리/IO 핸드셰이크가 꼬인 경우, 시스템 전체 정지 없이 버스만 복구
 
 주의
-- 본 재정의는 “설계(적용 예정)”입니다. 현재 reset은 소프트 리셋의 일부만 수행합니다(PC/IR/플래그/표시 중심).
-- reset hard / reset bus 명령은 문서에 명시된 대로 추가될 예정입니다. 적용 시 본 파일과 프롬프트 안내를 함께 갱신합니다.
+- 본 reset/reset hard/reset bus 기능은 현재 코드에 구현되어 있습니다.

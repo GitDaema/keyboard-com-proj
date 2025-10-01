@@ -62,6 +62,11 @@ def main():
         mem = BusMemory(mem_core, bus, only_variable_keys=True)
         # 1) CPU 구성: ISA 모드 + 인터랙티브 실행(콘솔 입력으로 스텝/제어)
         cpu = CPU(debug=True, mem=mem, interactive=True, use_isa=True)
+        # Register CPU as sink for bus-level memory events (watch/break)
+        try:
+            mem.set_sink(cpu)
+        except Exception:
+            pass
 
         # 2) 프로그램: 상태가 “키보드 불빛”에 매핑되도록 작성된 샘플
         #    - IF/THEN/ELSE/END 블록 포함(전처리로 단순화)
@@ -129,18 +134,31 @@ def main():
 
         # 실행
         cpu.load_program(program, debug=True)
-        # 인터랙티브: Enter=스텝, c=연속, q=종료 + 확장 명령(cmd)
-        cpu.run()
+
+        # 모드 선택: run(표시 중심) / run_led(패널 제어 + 기록/서비스)
+        try:
+            print("[MODE] 선택: 1) run  2) run_led  (기본=run) > ", end="", flush=True)
+            choice = (input() or "").strip().lower()
+        except Exception:
+            choice = ""
+
+        if choice in ("2", "run_led", "led"):
+            # LED를 스위치로 사용하는 패널 모드
+            print("[INFO] LED 패널(run_led) 모드: 콘솔에서 trace/overlay/reset 등 입력 시 LED가 실제로 반영되어 제어됩니다.")
+            cpu.cp_enabled = True
+            cpu.run_led()
+        else:
+            # 기존 인터랙티브(run) 모드
+            print("[INFO] run 모드: 표시 중심. 콘솔 명령은 실행 제어/LED 표시를 변경합니다.")
+            # 인터랙티브: Enter=스텝, c=연속, q=종료 + 확장 명령(cmd)
+            cpu.run()
 
         # 최종 확인(빠른 요약)
-        # try:
-        #     va = mem.get('a'); vx = mem.get('x'); vd = mem.get('d'); vs = mem.get('s')
-        #     print(f"[RESULT] a={va} x={vx} d={vd} s={vs}")
-        # except Exception:
-        #     pass
-        
-        # 종료 전 일시 정지(콘솔 확인용)
-        input()
+        try:
+            va = mem.get('a'); vx = mem.get('x'); vd = mem.get('d'); vs = mem.get('s')
+            print(f"[RESULT] a={va} x={vx} d={vd} s={vs}")
+        except Exception:
+            pass
         
     finally:
         init_all_keys()

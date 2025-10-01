@@ -5,8 +5,11 @@ import threading
 from queue import Queue, Empty
 
 from utils.keyboard_presets import FLAG_LABELS, BINARY_COLORS
+import utils.color_presets as cp
+from rgb_controller import set_key_color
 from utils.stage_indicator import post_stage, clear_stages
 from utils.ir_indicator import update_from_decoded, clear_ir, encode_from_source_line_fixed, set_ir, read_ir
+from utils.ir_indicator import calibrate_ir
 from utils.run_pause_indicator import run_on, run_off
 from utils.pc_indicator import update_pc, clear_pc
 from utils.control_plane import (
@@ -34,6 +37,7 @@ from utils.bit_lut import (
     shl8_via_lut, shr8_via_lut
 )
 from utils.keyboard_presets import SRC1, SRC2, RES
+from utils.keyboard_presets import VARIABLE_KEYS, BUS_ADDR_VALID, BUS_RD, BUS_WR, BUS_ACK
 
 
 """
@@ -115,6 +119,12 @@ class CPU:
         # 湲곕낯媛?False: ?명꽣?숉떚釉?紐⑤뱶?먯꽌 肄섏넄 ?낅젰 ?곗꽑
         self.cp_enabled: bool = False
         self._trace_log: list[Dict[str, Any]] = []
+        # Track if a reset was requested during a step so we don't overwrite PC later in the same step
+        self._reset_pending: bool = False
+        # Break/Watch/Bank config (driven by LED control-plane)
+        self._break_mode: str = "NONE"   # NONE | BRANCH | WWRITE
+        self._watch_mode: str = "NONE"   # NONE | READ | WRITE
+        self._space_mode: str = "DATA0"  # DATA0 | DATA1 | PROG | IO
         # Background command reader for interactive mode
         self._cmd_q: Queue[str] = Queue()
         self._cmd_thread = None  # type: ignore[assignment]
@@ -207,6 +217,15 @@ class CPU:
             self._on_writeback(changes)
             self._sync_flag_leds()
             self._maybe_pause()
+            # If a reset happened during pause, stop here to avoid overwriting PC
+            if getattr(self, "_reset_pending", False):
+                try:
+                    self._on_pc_advance(start_pc, self.pc.value)
+                except Exception:
+                    pass
+                self._reset_pending = False
+                self.ir.clear()
+                return not self.halted
             if self.halted or self._pc_overridden:
                 break
         if not self._pc_overridden:
@@ -215,6 +234,22 @@ class CPU:
         else:
             self._on_pc_advance(start_pc, self.pc.value)
         self.ir.clear()
+        # Break on control-flow events when configured (BRANCH mode, IR/PC space)
+        try:
+            if self._break_mode == "BRANCH" and self._space_mode in ("PROG", "DATA0", "DATA1"):
+                # A simple heuristic: halt when op is any branch/JMP or CMP was executed in this step
+                dec = getattr(self.ir, "decoded", None)
+                if dec is not None:
+                    op = str(dec[0]).upper()
+                    if op in ("JMP", "BEQ", "BNE", "BMI", "BPL", "BVS", "BVC", "BCS", "BCC", "CMP", "CMPI"):
+                        self._println(f"[BRK]    {op} event -> HALT")
+                        self.halted = True
+                        try:
+                            run_off(); set_run_state("HALT")
+                        except Exception:
+                            pass
+        except Exception:
+            pass
         return not self.halted
 
     def _step_isa(self) -> bool:
@@ -506,10 +541,32 @@ class CPU:
         self._sync_flag_leds()
         self._maybe_pause()
 
-        # Advance PC
+        # If a reset occurred during pause handling, preserve PC set by reset
+        if getattr(self, "_reset_pending", False):
+            try:
+                self._on_pc_advance(start_pc, self.pc.value)
+            except Exception:
+                pass
+            self._reset_pending = False
+            if self.halted:
+                self._on_halt()
+            return not self.halted
+
+        # Advance PC normally
         old_pc = start_pc
         self.pc.value = next_pc
         self._on_pc_advance(old_pc, self.pc.value)
+        # Break on control-flow events when configured (BRANCH mode) in ISA path
+        try:
+            if self._break_mode == "BRANCH" and taken:
+                self._println("[BRK]    BRANCH/JMP taken -> HALT")
+                self.halted = True
+                try:
+                    run_off(); set_run_state("HALT")
+                except Exception:
+                    pass
+        except Exception:
+            pass
         if self.halted:
             self._on_halt()
         return not self.halted
@@ -542,7 +599,8 @@ class CPU:
         # nested input() calls fighting for stdin. This makes the prompt appear
         # immediately without needing an extra Enter press.
         prompt = (
-            "[step] Enter=next | c/run=continue | p/pause=pause | h/halt=halt | ehalt | reset | "
+            "[step] Enter=next | c/run=continue | p/pause=pause | h/halt=halt | ehalt | "
+            "reset | reset hard | reset bus | "
             "s/step/instr | mi/micro | cont | trace on/off/mark | overlay alu/irpc/bus/service/none | q=quit > "
         )
         try:
@@ -625,6 +683,22 @@ class CPU:
                 pass
             try:
                 self._soft_reset_visuals()
+            except Exception:
+                pass
+            self._reset_pending = True
+        elif s == "reset hard":
+            try:
+                set_esc_state("RESET")
+            except Exception:
+                pass
+            try:
+                self._hard_reset(recalibrate=False)
+            except Exception:
+                pass
+            self._reset_pending = True
+        elif s == "reset bus":
+            try:
+                self._reset_bus()
             except Exception:
                 pass
         elif s == "instr" or s == "step" or s == "s":
@@ -711,29 +785,83 @@ class CPU:
         grave/esc/tab/caps/left_shift ??而щ윭瑜?二쇨린?곸쑝濡??먮룆?섏뿬
         RUN/PAUSE/HALT/RESET/STEP/?쒕퉬???숈옉???섑뻾?쒕떎.
         """
-        self._println("\n[RUN] Starting execution...")
+        self._println("\n[RUN-LED] Starting LED-gated execution...")
         try:
             run_on()
         except Exception:
             pass
+        # Start background command reader so console can set LED states
+        try:
+            if self._cmd_thread is None or not self._cmd_thread.is_alive():
+                self._start_cmd_reader()
+        except Exception:
+            pass
+        # State trackers (edge/one-shot behaviors & debug logs)
+        last_run: str | None = None
+        last_esc: str | None = None
+        last_step: str | None = None
+        last_trace: str | None = None
+        last_overlay: str | None = None
+        mark_armed: bool = False
         while True:
+            # Drain any console commands to update LED states immediately
+            try:
+                self._drain_cmd_queue()
+            except Exception:
+                pass
             st: ControlStates = cp_poll()
-            # ESC ?곗꽑?쒖쐞 (E-HALT/RESET)
-            if st.esc == "EHALT":
+            # Debug: state transitions
+            try:
+                if st.run != last_run:
+                    self._println(f"[CP] RUN_STATE {last_run or '-'} -> {st.run}")
+                    last_run = st.run
+                if st.step != last_step:
+                    self._println(f"[CP] STEP_MODE {last_step or '-'} -> {st.step}")
+                    last_step = st.step
+                if st.trace != last_trace:
+                    self._println(f"[CP] TRACE {last_trace or '-'} -> {st.trace}")
+                    if st.trace == "MARK" and last_trace != "MARK":
+                        mark_armed = True
+                        self._println("[TRACE] MARK armed (one-shot)")
+                    last_trace = st.trace
+                if st.overlay != last_overlay:
+                    self._println(f"[CP] OVERLAY {last_overlay or '-'} -> {st.overlay}")
+                    last_overlay = st.overlay
+            except Exception:
+                pass
+            # ESC edge-trigger handling (momentary)
+            if st.esc == "EHALT" and last_esc != "EHALT":
+                self._println("[CP] E-HALT edge -> HALT")
                 self.halted = True
                 try:
                     run_off()
                 except Exception:
                     pass
                 break
-            if st.esc == "RESET":
+            if st.esc == "RESET" and last_esc != "RESET":
+                self._println("[CP] RESET edge -> soft reset visuals")
                 self._soft_reset_visuals()
                 try:
                     run_off()
                 except Exception:
                     pass
+                self._reset_pending = True
                 time.sleep(0.02)
+                last_esc = st.esc
                 continue
+            last_esc = st.esc
+
+            # Update Break/Watch/Space config from LEDs
+            try:
+                # tab: break mode (CONT=None, INSTR=BRANCH, MICRO=WWRITE)
+                self._break_mode = ("NONE" if st.step == "CONT" else ("BRANCH" if st.step == "INSTR" else "WWRITE"))
+                # caps: watch mode (OFF=None, ON=READ, MARK=WRITE)
+                self._watch_mode = ("NONE" if st.trace == "OFF" else ("READ" if st.trace == "ON" else "WRITE"))
+                # left_shift: space/bank (NONE=DATA0, ALU=DATA1, IRPC=PROG, BUS=IO)
+                space_map = {"NONE": "DATA0", "ALU": "DATA1", "IRPC": "PROG", "BUS": "IO", "SERVICE": "SERVICE"}
+                self._space_mode = space_map.get(st.overlay, "DATA0")
+            except Exception:
+                pass
 
             # 二??곹깭(RUN/PAUSE/HALT/FAULT)
             if st.run in ("HALT", "FAULT"):
@@ -748,8 +876,13 @@ class CPU:
                     run_off()
                 except Exception:
                     pass
+                # SERVICE overlay acts only during pause
                 try:
-                    cp_service(st)
+                    if st.overlay == "SERVICE":
+                        self._println("[SERVICE] request -> calibrate IR (if cooldown passed)")
+                    ran = cp_service(st)
+                    if ran:
+                        self._println("[SERVICE] calibrate IR completed")
                 except Exception:
                     pass
                 time.sleep(0.02)
@@ -761,12 +894,19 @@ class CPU:
                 cont = self.step()
                 # Trace gate
                 try:
-                    if st.trace in ("ON", "MARK"):
+                    if st.trace == "ON" or mark_armed:
                         self._trace_log.append({
                             "pc": int(self.pc.value),
                             "flags": dict(self.flags),
-                            "marker": (st.trace == "MARK"),
+                            "marker": bool(mark_armed),
                         })
+                        self._println(f"[TRACE] appended pc={int(self.pc.value)} marker={bool(mark_armed)}")
+                        if mark_armed:
+                            mark_armed = False
+                            try:
+                                set_trace_state("ON")
+                            except Exception:
+                                pass
                 except Exception:
                     pass
                 try:
@@ -784,12 +924,19 @@ class CPU:
             elif st.step == "MICRO":
                 # ?ㅼ젣 留덉씠?щ줈 ?ㅽ뀦? ?몄텧?섏뼱 ?덉? ?딆븘 ISA ?ㅽ뀦 1?뚮줈 ?泥?                cont = self.step()
                 try:
-                    if st.trace in ("ON", "MARK"):
+                    if st.trace == "ON" or mark_armed:
                         self._trace_log.append({
                             "pc": int(self.pc.value),
                             "flags": dict(self.flags),
-                            "marker": (st.trace == "MARK"),
+                            "marker": bool(mark_armed),
                         })
+                        self._println(f"[TRACE] appended pc={int(self.pc.value)} marker={bool(mark_armed)}")
+                        if mark_armed:
+                            mark_armed = False
+                            try:
+                                set_trace_state("ON")
+                            except Exception:
+                                pass
                 except Exception:
                     pass
                 try:
@@ -807,12 +954,19 @@ class CPU:
             else:  # CONT
                 cont = self.step()
                 try:
-                    if st.trace in ("ON", "MARK"):
+                    if st.trace == "ON" or mark_armed:
                         self._trace_log.append({
                             "pc": int(self.pc.value),
                             "flags": dict(self.flags),
-                            "marker": (st.trace == "MARK"),
+                            "marker": bool(mark_armed),
                         })
+                        self._println(f"[TRACE] appended pc={int(self.pc.value)} marker={bool(mark_armed)}")
+                        if mark_armed:
+                            mark_armed = False
+                            try:
+                                set_trace_state("ON")
+                            except Exception:
+                                pass
                 except Exception:
                     pass
                 try:
@@ -856,6 +1010,107 @@ class CPU:
             pass
         try:
             clear_pc()
+        except Exception:
+            pass
+        # Ensure bus lines are idle
+        try:
+            self._reset_bus()
+        except Exception:
+            pass
+
+    def _hard_reset(self, *, recalibrate: bool = False) -> None:
+        """Cold-like reset: soft visuals + zeroize variables and reset UI panel.
+        - Soft reset visuals (PC/IR/flags/stages/PC indicator)
+        - Zero all VARIABLE_KEYS in memory
+        - Clear trace log and set panel switches to defaults (CONT/OFF/NONE)
+        - Optionally request IR calibration
+        """
+        # Base soft reset of core visual/state
+        self._soft_reset_visuals()
+
+        # Zeroize variables (memory) and visually turn them OFF per project convention
+        try:
+            for name in list(VARIABLE_KEYS):
+                try:
+                    # Logical content reset (if any agent reads values later)
+                    self.mem.set(name, 0)
+                except Exception:
+                    pass
+                try:
+                    # Visual OFF (black) — variables appear cleared on keyboard
+                    set_key_color(name, cp.BLACK)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Clear trace log buffer
+        try:
+            self._trace_log.clear()
+        except Exception:
+            self._trace_log = []
+
+        # Reset control panel indicators/modes to a clean default
+        try:
+            set_step_mode("CONT")
+        except Exception:
+            pass
+        try:
+            set_trace_state("OFF")
+        except Exception:
+            pass
+        try:
+            set_overlay_mode("NONE")
+        except Exception:
+            pass
+        try:
+            set_run_state("PAUSE")
+        except Exception:
+            pass
+
+        # Optionally recalibrate IR decoding colors
+        if recalibrate:
+            try:
+                calibrate_ir(samples=2, settle_ms=8, debug=False)
+            except Exception:
+                pass
+
+    def _reset_bus(self) -> None:
+        """Reset/clear LED-bus control lines without touching CPU/vars.
+        - Abort any ongoing cycle and turn ADDR_VALID/RD/WR off
+        - Ensure ACK is off
+        - Preserve PC/IR/flags/memory
+        """
+        # If BusMemory wrapper present, use its BusInterface
+        try:
+            bus = getattr(self.mem, "_bus", None)
+        except Exception:
+            bus = None
+        if bus is not None:
+            try:
+                bus.end_cycle()  # ADDR_VALID/RD/WR -> OFF
+            except Exception:
+                pass
+            try:
+                # Best-effort force ACK off (private helper)
+                if hasattr(bus, "_ack_off"):
+                    bus._ack_off()
+            except Exception:
+                pass
+            return
+
+        # Fallback: directly drive keys to OFF using presets
+        try:
+            from openrgb.utils import RGBColor
+            from rgb_controller import set_key_color
+            _, off_addr = BINARY_COLORS.get(BUS_ADDR_VALID, ((0,0,0),(0,0,0)))
+            _, off_rd   = BINARY_COLORS.get(BUS_RD,         ((0,0,0),(0,0,0)))
+            _, off_wr   = BINARY_COLORS.get(BUS_WR,         ((0,0,0),(0,0,0)))
+            _, off_ack  = BINARY_COLORS.get(BUS_ACK,        ((0,0,0),(0,0,0)))
+            set_key_color(BUS_ADDR_VALID, RGBColor(*off_addr))
+            set_key_color(BUS_RD,         RGBColor(*off_rd))
+            set_key_color(BUS_WR,         RGBColor(*off_wr))
+            set_key_color(BUS_ACK,        RGBColor(*off_ack))
         except Exception:
             pass
 
@@ -950,6 +1205,7 @@ class CPU:
             except Empty:
                 break
             try:
+                self._println(f"[CMD] {s}")
                 self._process_command_line(s)
             except Exception:
                 pass
@@ -1004,6 +1260,40 @@ class CPU:
                 pass
             try:
                 self._soft_reset_visuals()
+            except Exception:
+                pass
+            self._reset_pending = True
+            return
+        if s == "reset hard":
+            try:
+                set_esc_state("RESET")
+            except Exception:
+                pass
+            try:
+                self._hard_reset(recalibrate=False)
+            except Exception:
+                pass
+            self._reset_pending = True
+            return
+        if s == "reset bus":
+            try:
+                self._reset_bus()
+            except Exception:
+                pass
+            return
+        if s == "reset hard":
+            try:
+                set_esc_state("RESET")
+            except Exception:
+                pass
+            try:
+                self._hard_reset(recalibrate=False)
+            except Exception:
+                pass
+            return
+        if s == "reset bus":
+            try:
+                self._reset_bus()
             except Exception:
                 pass
             return
@@ -1633,6 +1923,48 @@ class CPU:
             run_off()
         except Exception:
             pass
+
+    # ---- Watch/Break integration (bus events) ----
+    def on_bus_mem_event(self, ev: Dict[str, Any]) -> None:
+        """Called by BusMemory after each get/set on variables.
+        ev = { 'dir': 'READ'|'WRITE', 'name': 'a'.., 'value': int }
+        Applies watch/break rules based on caps_lock(tab)/left_shift states.
+        """
+        try:
+            name = str(ev.get('name', ''))
+            direction = str(ev.get('dir', ''))
+        except Exception:
+            return
+        # Space/bank filter: only DATA spaces watch variable keys
+        if self._space_mode not in ("DATA0", "DATA1"):
+            return
+        if name not in VARIABLE_KEYS:
+            return
+        # Watch mode reacts immediately
+        if self._watch_mode == "READ" and direction == "READ":
+            self._println(f"[WATCH] READ hit at var '{name}' -> HALT")
+            self.halted = True
+            try:
+                run_off(); set_run_state("HALT")
+            except Exception:
+                pass
+            return
+        if self._watch_mode == "WRITE" and direction == "WRITE":
+            self._println(f"[WATCH] WRITE hit at var '{name}' -> HALT")
+            self.halted = True
+            try:
+                run_off(); set_run_state("HALT")
+            except Exception:
+                pass
+            return
+        # Break mode 'WWRITE' halts on any variable write
+        if self._break_mode == "WWRITE" and direction == "WRITE":
+            self._println(f"[BRK]    WRITE break at var '{name}' -> HALT")
+            self.halted = True
+            try:
+                run_off(); set_run_state("HALT")
+            except Exception:
+                pass
 
     def _println(self, s: str) -> None:
         if self.debug:

@@ -157,6 +157,21 @@ class BusMemory:
         self._inner = inner
         self._bus = bus
         self._only_vars = bool(only_variable_keys)
+        # Optional sink for watch/break events (set by CPU)
+        self._sink: Any | None = None
+
+    # External modules (e.g., CPU) can register a sink to observe bus-level mem ops
+    def set_sink(self, sink: Any) -> None:
+        """Register an event sink object having on_bus_mem_event(dict) method."""
+        self._sink = sink
+
+    def _emit(self, direction: str, name: str, value: int | None = None) -> None:
+        try:
+            if self._sink is not None and hasattr(self._sink, "on_bus_mem_event"):
+                ev = {"dir": direction, "name": str(name), "value": value}
+                self._sink.on_bus_mem_event(ev)
+        except Exception:
+            pass
 
     def _is_mem_var(self, name: str) -> bool:
         if not self._only_vars:
@@ -176,8 +191,12 @@ class BusMemory:
                 self._bus.end_cycle()
             # 핸드셰이크 결과와 무관하게 LED가 진실 소스로 동작하므로 값을 읽는다.
             # (외부 ACK 사용 시에는 ok가 진행 조건 의미를 갖는다)
-            return self._inner.get(name)
-        return self._inner.get(name)
+            val = self._inner.get(name)
+            # Emit watch event after successful read
+            self._emit("READ", name, val)
+            return val
+        val = self._inner.get(name)
+        return val
 
     def set(self, name: str, val: int) -> None:
         if self._is_mem_var(name):
@@ -187,6 +206,8 @@ class BusMemory:
             finally:
                 self._bus.end_cycle()
             self._inner.set(name, val)
+            # Emit watch event after write
+            self._emit("WRITE", name, val)
             return
         self._inner.set(name, val)
 
@@ -200,4 +221,3 @@ class BusMemory:
         if hasattr(self._inner, "get_flag"):
             return bool(self._inner.get_flag(label))
         return False
-
