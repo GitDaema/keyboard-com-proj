@@ -107,12 +107,12 @@ LED 패널 모드(run_led): 하드웨어형 기능(입력 신호 A → 출력 �
   • CONT(꺼짐): 브레이크 없음
   • INSTR(흰): BRANCH 브레이크(분기/점프/비교 시 즉시 정지)
   • MICRO(분홍): WRITE 브레이크(변수 쓰기 발생 시 즉시 정지)
-  • 로그 예: [BRK] BRANCH/JMP taken -> HALT / [BRK] WRITE break at var 'a' -> HALT
+  • 로그 예: [BRK] BRANCH/JMP taken -> PAUSE / [BRK] WRITE break at var 'a' -> PAUSE
 - caps_lock(트레이스 LED) = 워치포인트 게이트
   • OFF: 워치 없음
   • ON(시안): READ 워치(변수 읽기 시 정지)
   • MARK(노랑): 다음 1회 기록에 마커 + WRITE 워치(변수 쓰기 시 정지)
-  • 로그 예: [WATCH] READ hit at var 'x' -> HALT / [WATCH] WRITE hit at var 'd' -> HALT
+  • 로그 예: [WATCH] READ hit at var 'x' -> PAUSE / [WATCH] WRITE hit at var 'd' -> PAUSE
 - left_shift(오버레이 LED) = 주소공간/뱅크 선택(감시/브레이크 대상 필터)
   • NONE(꺼짐)=DATA0, ALU(노랑)=DATA1, IRPC(파랑)=PROG, BUS(보라)=IO, SERVICE(시안)=보정 1회
 

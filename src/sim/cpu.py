@@ -128,6 +128,9 @@ class CPU:
         # Background command reader for interactive mode
         self._cmd_q: Queue[str] = Queue()
         self._cmd_thread = None  # type: ignore[assignment]
+        # LED control-plane continuous run state (applies in run_led mode)
+        self._cp_continuous_run: bool = False
+        self._cp_single_step: bool = False
 
     # ---------- ?몃? API ----------
     def load_program(self, lines: List[str], *, debug: bool | None = None) -> None:
@@ -242,10 +245,10 @@ class CPU:
                 if dec is not None:
                     op = str(dec[0]).upper()
                     if op in ("JMP", "BEQ", "BNE", "BMI", "BPL", "BVS", "BVC", "BCS", "BCC", "CMP", "CMPI"):
-                        self._println(f"[BRK]    {op} event -> HALT")
-                        self.halted = True
+                        # Pause instead of halt on branch/compare event
+                        self._println(f"[BRK]    {op} event -> PAUSE")
                         try:
-                            run_off(); set_run_state("HALT")
+                            run_off(); set_run_state("PAUSE")
                         except Exception:
                             pass
         except Exception:
@@ -558,11 +561,11 @@ class CPU:
         self._on_pc_advance(old_pc, self.pc.value)
         # Break on control-flow events when configured (BRANCH mode) in ISA path
         try:
-            if self._break_mode == "BRANCH" and taken:
-                self._println("[BRK]    BRANCH/JMP taken -> HALT")
-                self.halted = True
+            if self._break_mode == "BRANCH" and taken and self._space_mode in ("PROG", "DATA0", "DATA1"):
+                # Pause instead of halt when branch/jump is taken
+                self._println("[BRK]    BRANCH/JMP taken -> PAUSE")
                 try:
-                    run_off(); set_run_state("HALT")
+                    run_off(); set_run_state("PAUSE")
                 except Exception:
                     pass
         except Exception:
@@ -706,17 +709,9 @@ class CPU:
                 set_step_mode("INSTR")
             except Exception:
                 pass
-            try:
-                run_on()
-            except Exception:
-                pass
         elif s == "micro" or s == "mi":
             try:
                 set_step_mode("MICRO")
-            except Exception:
-                pass
-            try:
-                run_on()
             except Exception:
                 pass
         elif s == "cont":
@@ -786,8 +781,17 @@ class CPU:
         RUN/PAUSE/HALT/RESET/STEP/?쒕퉬???숈옉???섑뻾?쒕떎.
         """
         self._println("\n[RUN-LED] Starting LED-gated execution...")
+        # Default to normal step mode (CONT); start paused
         try:
-            run_on()
+            set_step_mode("CONT")
+        except Exception:
+            pass
+        try:
+            set_run_state("PAUSE")
+        except Exception:
+            pass
+        try:
+            run_off()
         except Exception:
             pass
         # Start background command reader so console can set LED states
@@ -833,18 +837,21 @@ class CPU:
             if st.esc == "EHALT" and last_esc != "EHALT":
                 self._println("[CP] E-HALT edge -> HALT")
                 self.halted = True
-                try:
-                    run_off()
-                except Exception:
-                    pass
+                # Single-step returns to PAUSE; continuous-run keeps RUN
+                if not getattr(self, "_cp_continuous_run", False):
+                    try:
+                        run_off()
+                    except Exception:
+                        pass
                 break
             if st.esc == "RESET" and last_esc != "RESET":
                 self._println("[CP] RESET edge -> soft reset visuals")
                 self._soft_reset_visuals()
-                try:
-                    run_off()
-                except Exception:
-                    pass
+                if not getattr(self, "_cp_continuous_run", False):
+                    try:
+                        run_off()
+                    except Exception:
+                        pass
                 self._reset_pending = True
                 time.sleep(0.02)
                 last_esc = st.esc
@@ -1213,13 +1220,19 @@ class CPU:
     def _process_command_line(self, s: str) -> None:
         s = (s or "").strip().lower()
         if s == "":
+            # Single-step request in LED mode
+            self._cp_single_step = True
+            self._cp_continuous_run = False
             try:
                 run_on(); set_run_state("RUN")
             except Exception:
                 pass
             return
         if s in ("c", "run"):
+            # Continuous run request
             self._continue_run = True
+            self._cp_continuous_run = True
+            self._cp_single_step = False
             try:
                 run_on(); set_run_state("RUN")
             except Exception:
@@ -1234,6 +1247,7 @@ class CPU:
             return
         if s in ("pause", "p"):
             self._continue_run = False
+            self._cp_continuous_run = False
             try:
                 run_off(); set_run_state("PAUSE")
             except Exception:
@@ -1241,6 +1255,7 @@ class CPU:
             return
         if s in ("halt", "h"):
             self.halted = True
+            self._cp_continuous_run = False
             try:
                 run_off(); set_run_state("HALT")
             except Exception:
@@ -1299,7 +1314,27 @@ class CPU:
             return
         if s in ("instr", "step", "s"):
             try:
-                set_step_mode("INSTR"); run_on()
+                set_step_mode("INSTR")
+            except Exception:
+                pass
+            return
+        # Support two-word forms like 'step instr', 'step micro', 'step cont'
+        if s.startswith("step ") or s.startswith("s "):
+            try:
+                _, arg = (s + " ").split(" ", 1)
+                arg = (arg or "").strip()
+            except Exception:
+                arg = ""
+            try:
+                if arg.startswith("instr"):
+                    set_step_mode("INSTR")
+                elif arg.startswith("micro") or arg.startswith("mi"):
+                    set_step_mode("MICRO")
+                elif arg.startswith("cont"):
+                    set_step_mode("CONT"); run_on(); set_run_state("RUN")
+                else:
+                    # default to INSTR if unspecified/unknown
+                    set_step_mode("INSTR")
             except Exception:
                 pass
             return
@@ -1940,29 +1975,26 @@ class CPU:
             return
         if name not in VARIABLE_KEYS:
             return
-        # Watch mode reacts immediately
+        # Watch mode reacts immediately (pause instead of halt)
         if self._watch_mode == "READ" and direction == "READ":
-            self._println(f"[WATCH] READ hit at var '{name}' -> HALT")
-            self.halted = True
+            self._println(f"[WATCH] READ hit at var '{name}' -> PAUSE")
             try:
-                run_off(); set_run_state("HALT")
+                run_off(); set_run_state("PAUSE")
             except Exception:
                 pass
             return
         if self._watch_mode == "WRITE" and direction == "WRITE":
-            self._println(f"[WATCH] WRITE hit at var '{name}' -> HALT")
-            self.halted = True
+            self._println(f"[WATCH] WRITE hit at var '{name}' -> PAUSE")
             try:
-                run_off(); set_run_state("HALT")
+                run_off(); set_run_state("PAUSE")
             except Exception:
                 pass
             return
         # Break mode 'WWRITE' halts on any variable write
         if self._break_mode == "WWRITE" and direction == "WRITE":
-            self._println(f"[BRK]    WRITE break at var '{name}' -> HALT")
-            self.halted = True
+            self._println(f"[BRK]    WRITE break at var '{name}' -> PAUSE")
             try:
-                run_off(); set_run_state("HALT")
+                run_off(); set_run_state("PAUSE")
             except Exception:
                 pass
 

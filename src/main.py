@@ -88,9 +88,9 @@ def main():
             "s = 0",           # 임시/플래그 용도
 
             # SHIFT 테스트: s <- a; SHL/SHR 실행(ISA: SHIFT)
-            "s = a",
-            "SHL s",
-            "SHR s",
+            # "s = a",
+            # "SHL s",
+            # "SHR s",
 
             # a < 0 이면 a = -a (절대값 만들기)
             "IF a < #0 THEN",
