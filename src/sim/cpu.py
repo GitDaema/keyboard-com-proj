@@ -880,7 +880,8 @@ class CPU:
                 break
             if st.run == "PAUSE":
                 try:
-                    run_off()
+                    if not getattr(self, "_cp_continuous_run", False):
+                        run_off()
                 except Exception:
                     pass
                 # SERVICE overlay acts only during pause
@@ -917,7 +918,8 @@ class CPU:
                 except Exception:
                     pass
                 try:
-                    run_off()
+                    if not getattr(self, "_cp_continuous_run", False):
+                        run_off()
                 except Exception:
                     pass
                 try:
