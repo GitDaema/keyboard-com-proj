@@ -184,30 +184,44 @@ class BusMemory:
     # ---- proxied API ----
     def get(self, name: str) -> int:
         if self._is_mem_var(name):
+            t0 = time.time()
             self._bus.begin_read()
             try:
                 ok = self._bus.handshake()
             finally:
                 self._bus.end_cycle()
+            lat_ms = int((time.time() - t0) * 1000.0)
             # 핸드셰이크 결과와 무관하게 LED가 진실 소스로 동작하므로 값을 읽는다.
             # (외부 ACK 사용 시에는 ok가 진행 조건 의미를 갖는다)
             val = self._inner.get(name)
-            # Emit watch event after successful read
-            self._emit("READ", name, val)
+            # Emit watch event after successful read with latency metadata
+            try:
+                if self._sink is not None and hasattr(self._sink, "on_bus_mem_event"):
+                    ev = {"dir": "READ", "name": str(name), "value": val, "lat_ms": lat_ms}
+                    self._sink.on_bus_mem_event(ev)
+            except Exception:
+                pass
             return val
         val = self._inner.get(name)
         return val
 
     def set(self, name: str, val: int) -> None:
         if self._is_mem_var(name):
+            t0 = time.time()
             self._bus.begin_write()
             try:
                 ok = self._bus.handshake()
             finally:
                 self._bus.end_cycle()
+            lat_ms = int((time.time() - t0) * 1000.0)
             self._inner.set(name, val)
-            # Emit watch event after write
-            self._emit("WRITE", name, val)
+            # Emit watch event after write with latency metadata
+            try:
+                if self._sink is not None and hasattr(self._sink, "on_bus_mem_event"):
+                    ev = {"dir": "WRITE", "name": str(name), "value": val, "lat_ms": lat_ms}
+                    self._sink.on_bus_mem_event(ev)
+            except Exception:
+                pass
             return
         self._inner.set(name, val)
 

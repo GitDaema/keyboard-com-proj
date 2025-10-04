@@ -131,6 +131,40 @@ class CPU:
         # LED control-plane continuous run state (applies in run_led mode)
         self._cp_continuous_run: bool = False
         self._cp_single_step: bool = False
+        # Per-step write detection for one-shot MARK consumption
+        self._write_hit_in_step: bool = False
+        # One-shot trace marker (caps MARK) state
+        self._trace_mark_armed: bool = False
+
+    def _maybe_watch_prog_event(self, kind: str) -> None:
+        """Apply watch/break semantics for program space (IR/PC) when overlay=IRPC.
+        kind: 'IR_WRITE' | 'IR_READ' | 'PC_WRITE'
+        """
+        try:
+            if self._space_mode != "PROG":
+                return
+            if self._watch_mode == "READ" and kind in ("IR_READ",):
+                self._println(f"[WATCH] PROG {kind.lower()} -> PAUSE")
+                try:
+                    run_off(); set_run_state("PAUSE")
+                except Exception:
+                    pass
+                return
+            if self._watch_mode == "WRITE" and kind in ("IR_WRITE", "PC_WRITE"):
+                self._println(f"[WATCH] PROG {kind.lower()} -> PAUSE")
+                try:
+                    run_off(); set_run_state("PAUSE")
+                except Exception:
+                    pass
+                return
+            if self._break_mode == "WWRITE" and kind in ("IR_WRITE", "PC_WRITE"):
+                self._println(f"[BRK]    PROG {kind.lower()} -> PAUSE")
+                try:
+                    run_off(); set_run_state("PAUSE")
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     # ---------- ?몃? API ----------
     def load_program(self, lines: List[str], *, debug: bool | None = None) -> None:
@@ -280,6 +314,11 @@ class CPU:
                 set_ir(insn.op4, insn.dst4, insn.arg8)
             except Exception:
                 pass
+            # Watch IR write in PROG overlay
+            try:
+                self._maybe_watch_prog_event("IR_WRITE")
+            except Exception:
+                pass
             self._println(f"[FETCH] PC={cur_pc:02d}  insn='{insn.text}' | op={insn.op4:X} dst={insn.dst4:X} arg={insn.arg8:02X}")
 
             # DECODE stage (read IR back)
@@ -288,6 +327,11 @@ class CPU:
             except Exception:
                 pass
             op4, dst4, arg8 = read_ir(samples=3, use_calibration=True, debug=False)
+            # Watch IR read in PROG overlay
+            try:
+                self._maybe_watch_prog_event("IR_READ")
+            except Exception:
+                pass
             self._println(f"[DECODE] op={op4:X} dst={dst4:X} arg={arg8:02X}")
 
             # EXT prefix: op nibble matches NOP but with DST marking type
@@ -541,6 +585,24 @@ class CPU:
             self._println(f"[WB]     {', '.join(f'{k}={v:4d}' for k,v in ch.items())}")
         else:
             self._println("[WB]     (no changes)")
+        # If ALU overlay selected (DATA1), surface SRC1/SRC2/RES and flags here as well (ISA path)
+        try:
+            if getattr(self, "_space_mode", "DATA0") == "DATA1":
+                s1 = self._read_u8_from_group("SRC1")
+                s2 = self._read_u8_from_group("SRC2")
+                r  = self._read_u8_from_group("RES")
+                def _bits(u: int) -> str:
+                    b = f"{u & 0xFF:08b}"
+                    return b[:4] + " " + b[4:]
+                z = self.flags.get("Z", 0); n = self.flags.get("N", 0); vf = self.flags.get("V", 0); c = self.flags.get("C", 0)
+                rs = r if r < 128 else r - 256
+                self._println(
+                    f"[ALU]    SRC1=0x{s1:02X} ({_bits(s1)})  "
+                    f"SRC2=0x{s2:02X} ({_bits(s2)})  "
+                    f"RES=0x{r:02X} ({_bits(r)}) => {rs:4d} | Z={z} N={n} V={vf} C={c}"
+                )
+        except Exception:
+            pass
         self._sync_flag_leds()
         self._maybe_pause()
 
@@ -602,9 +664,9 @@ class CPU:
         # nested input() calls fighting for stdin. This makes the prompt appear
         # immediately without needing an extra Enter press.
         prompt = (
-            "[step] Enter=next | c/run=continue | p/pause=pause | h/halt=halt | ehalt | "
+            "[step] Enter=step | c/run/r/continue=continue | p/pause=pause | h/halt=halt | ehalt | "
             "reset | reset hard | reset bus | "
-            "s/step/instr | mi/micro | cont | trace on/off/mark | overlay alu/irpc/bus/service/none | q=quit > "
+            "s/step/instr (ISA) | mi/micro (micro-lines) | cont (mode only) | trace on/off/mark | overlay alu/irpc/bus/service/none | q=quit > "
         )
         try:
             print(prompt, end="", flush=True)
@@ -631,7 +693,7 @@ class CPU:
                     pass
         except Exception:
             s = ""
-        if s == "c" or s == "run":
+        if s in ("c", "run", "r", "continue"):
             self._continue_run = True
             # Resume continuous run: show RUN (on)
             try:
@@ -709,9 +771,19 @@ class CPU:
                 set_step_mode("INSTR")
             except Exception:
                 pass
+            try:
+                # Switch to ISA instruction stepping
+                self.use_isa = True
+            except Exception:
+                pass
         elif s == "micro" or s == "mi":
             try:
                 set_step_mode("MICRO")
+            except Exception:
+                pass
+            try:
+                # Switch to legacy micro-line stepping
+                self.use_isa = False
             except Exception:
                 pass
         elif s == "cont":
@@ -719,11 +791,7 @@ class CPU:
                 set_step_mode("CONT")
             except Exception:
                 pass
-            self._continue_run = True
-            try:
-                run_on(); set_run_state("RUN")
-            except Exception:
-                pass
+            # Mode only; do not auto-continue here
         elif s.startswith("trace"):
             try:
                 _, arg = (s + " ").split(" ", 1)
@@ -806,7 +874,8 @@ class CPU:
         last_step: str | None = None
         last_trace: str | None = None
         last_overlay: str | None = None
-        mark_armed: bool = False
+        # One-shot trace marker armed flag (instance-level to coordinate with watch events)
+        self._trace_mark_armed = getattr(self, "_trace_mark_armed", False)
         while True:
             # Drain any console commands to update LED states immediately
             try:
@@ -825,7 +894,7 @@ class CPU:
                 if st.trace != last_trace:
                     self._println(f"[CP] TRACE {last_trace or '-'} -> {st.trace}")
                     if st.trace == "MARK" and last_trace != "MARK":
-                        mark_armed = True
+                        self._trace_mark_armed = True
                         self._println("[TRACE] MARK armed (one-shot)")
                     last_trace = st.trace
                 if st.overlay != last_overlay:
@@ -899,18 +968,22 @@ class CPU:
             # RUN ?곹깭: ?ㅽ뀦 紐⑤뱶???곕씪 ?섑뻾
             cont = True
             if st.step == "INSTR":
+                # Reset per-step write flag before executing a step
+                self._write_hit_in_step = False
                 cont = self.step()
                 # Trace gate
                 try:
-                    if st.trace == "ON" or mark_armed:
+                    if st.trace == "ON" or self._trace_mark_armed:
+                        marker_now = bool(self._trace_mark_armed and self._write_hit_in_step)
                         self._trace_log.append({
                             "pc": int(self.pc.value),
                             "flags": dict(self.flags),
-                            "marker": bool(mark_armed),
+                            "marker": marker_now,
                         })
-                        self._println(f"[TRACE] appended pc={int(self.pc.value)} marker={bool(mark_armed)}")
-                        if mark_armed:
-                            mark_armed = False
+                        self._println(f"[TRACE] appended pc={int(self.pc.value)} marker={marker_now}")
+                        if marker_now:
+                            # Consume one-shot mark and revert caps to ON
+                            self._trace_mark_armed = False
                             try:
                                 set_trace_state("ON")
                             except Exception:
@@ -931,17 +1004,20 @@ class CPU:
                 time.sleep(0.01)
                 continue
             elif st.step == "MICRO":
-                # ?ㅼ젣 留덉씠?щ줈 ?ㅽ뀦? ?몄텧?섏뼱 ?덉? ?딆븘 ISA ?ㅽ뀦 1?뚮줈 ?泥?                cont = self.step()
+                # Micro mode; execute one ISA step (or micro) and honor continuous-run
+                self._write_hit_in_step = False
+                cont = self.step()
                 try:
-                    if st.trace == "ON" or mark_armed:
+                    if st.trace == "ON" or self._trace_mark_armed:
+                        marker_now = bool(self._trace_mark_armed and self._write_hit_in_step)
                         self._trace_log.append({
                             "pc": int(self.pc.value),
                             "flags": dict(self.flags),
-                            "marker": bool(mark_armed),
+                            "marker": marker_now,
                         })
-                        self._println(f"[TRACE] appended pc={int(self.pc.value)} marker={bool(mark_armed)}")
-                        if mark_armed:
-                            mark_armed = False
+                        self._println(f"[TRACE] appended pc={int(self.pc.value)} marker={marker_now}")
+                        if marker_now:
+                            self._trace_mark_armed = False
                             try:
                                 set_trace_state("ON")
                             except Exception:
@@ -949,7 +1025,9 @@ class CPU:
                 except Exception:
                     pass
                 try:
-                    run_off()
+                    # Only auto-pause after a step when NOT in continuous-run.
+                    if not getattr(self, "_cp_continuous_run", False):
+                        run_off()
                 except Exception:
                     pass
                 try:
@@ -961,17 +1039,19 @@ class CPU:
                 time.sleep(0.01)
                 continue
             else:  # CONT
+                self._write_hit_in_step = False
                 cont = self.step()
                 try:
-                    if st.trace == "ON" or mark_armed:
+                    if st.trace == "ON" or self._trace_mark_armed:
+                        marker_now = bool(self._trace_mark_armed and self._write_hit_in_step)
                         self._trace_log.append({
                             "pc": int(self.pc.value),
                             "flags": dict(self.flags),
-                            "marker": bool(mark_armed),
+                            "marker": marker_now,
                         })
-                        self._println(f"[TRACE] appended pc={int(self.pc.value)} marker={bool(mark_armed)}")
-                        if mark_armed:
-                            mark_armed = False
+                        self._println(f"[TRACE] appended pc={int(self.pc.value)} marker={marker_now}")
+                        if marker_now:
+                            self._trace_mark_armed = False
                             try:
                                 set_trace_state("ON")
                             except Exception:
@@ -1230,7 +1310,7 @@ class CPU:
             except Exception:
                 pass
             return
-        if s in ("c", "run"):
+        if s in ("c", "run", "r", "continue"):
             # Continuous run request
             self._continue_run = True
             self._cp_continuous_run = True
@@ -1319,6 +1399,10 @@ class CPU:
                 set_step_mode("INSTR")
             except Exception:
                 pass
+            try:
+                self.use_isa = True
+            except Exception:
+                pass
             return
         # Support two-word forms like 'step instr', 'step micro', 'step cont'
         if s.startswith("step ") or s.startswith("s "):
@@ -1329,29 +1413,30 @@ class CPU:
                 arg = ""
             try:
                 if arg.startswith("instr"):
-                    set_step_mode("INSTR")
+                    set_step_mode("INSTR"); self.use_isa = True
                 elif arg.startswith("micro") or arg.startswith("mi"):
-                    set_step_mode("MICRO")
+                    set_step_mode("MICRO"); self.use_isa = False
                 elif arg.startswith("cont"):
-                    set_step_mode("CONT"); run_on(); set_run_state("RUN")
+                    set_step_mode("CONT")
                 else:
                     # default to INSTR if unspecified/unknown
-                    set_step_mode("INSTR")
+                    set_step_mode("INSTR"); self.use_isa = True
             except Exception:
                 pass
             return
         if s in ("micro", "mi"):
             try:
-                set_step_mode("MICRO"); run_on()
+                # Only switch step mode; don't force RUN here. Also toggle to micro interpreter.
+                set_step_mode("MICRO"); self.use_isa = False
             except Exception:
                 pass
             return
         if s == "cont":
             try:
-                set_step_mode("CONT"); run_on(); set_run_state("RUN")
+                # Mode only; don't auto-continue
+                set_step_mode("CONT")
             except Exception:
                 pass
-            self._continue_run = True
             return
         if s.startswith("trace"):
             try:
@@ -1896,6 +1981,10 @@ class CPU:
                     set_ir(op4, dst4, arg8)
                 except Exception:
                     pass
+                try:
+                    self._maybe_watch_prog_event("IR_WRITE")
+                except Exception:
+                    pass
         except Exception:
             enc_bits = ""
         self._println(f"[FETCH] PC={self.pc.value:02d}  line='{text}'{enc_bits}")
@@ -1934,9 +2023,31 @@ class CPU:
             except Exception:
                 pass
             self._println("[WB]     (no changes)")
+        # If ALU overlay selected, also surface SRC1/SRC2/RES and flags to make overlay meaningful
+        try:
+            if getattr(self, "_space_mode", "DATA0") == "DATA1":
+                s1 = self._read_u8_from_group("SRC1")
+                s2 = self._read_u8_from_group("SRC2")
+                r  = self._read_u8_from_group("RES")
+                def _bits(u: int) -> str:
+                    b = f"{u & 0xFF:08b}"
+                    return b[:4] + " " + b[4:]
+                z = self.flags.get("Z", 0); n = self.flags.get("N", 0); vflag = self.flags.get("V", 0); c = self.flags.get("C", 0)
+                rs = r if r < 128 else r - 256
+                self._println(
+                    f"[ALU]    SRC1=0x{s1:02X} ({_bits(s1)})  "
+                    f"SRC2=0x{s2:02X} ({_bits(s2)})  "
+                    f"RES=0x{r:02X} ({_bits(r)}) => {rs:4d} | Z={z} N={n} V={vflag} C={c}"
+                )
+        except Exception:
+            pass
 
     def _on_pc_advance(self, old: int, new: int) -> None:
         self._println(f"[PC]     {old:02d} -> {new:02d}")
+        try:
+            self._maybe_watch_prog_event("PC_WRITE")
+        except Exception:
+            pass
 
     def _on_halt(self) -> None:
         self._println("[HALT]   Program finished or PC out of range.")
@@ -1972,33 +2083,98 @@ class CPU:
             direction = str(ev.get('dir', ''))
         except Exception:
             return
-        # Space/bank filter: only DATA spaces watch variable keys
-        if self._space_mode not in ("DATA0", "DATA1"):
+        # Optional latency metadata from BusMemory
+        lat_ms: int | None = None
+        try:
+            lat_ms = int(ev.get('lat_ms'))
+        except Exception:
+            lat_ms = None
+
+        # DATA spaces: normal variable watch/break
+        if self._space_mode in ("DATA0", "DATA1"):
+            if name not in VARIABLE_KEYS:
+                return
+            if self._watch_mode == "READ" and direction == "READ":
+                m = f"[WATCH] READ hit at var '{name}'"
+                if lat_ms is not None:
+                    m += f" (lat {lat_ms}ms)"
+                self._println(m + " -> PAUSE")
+                try:
+                    run_off(); set_run_state("PAUSE")
+                except Exception:
+                    pass
+                return
+            # Record that a WRITE happened in this step; used to consume one-shot MARK after the step.
+            if direction == "WRITE":
+                try:
+                    self._write_hit_in_step = True
+                except Exception:
+                    pass
+            if self._watch_mode == "WRITE" and direction == "WRITE":
+                m = f"[WATCH] WRITE hit at var '{name}'"
+                if lat_ms is not None:
+                    m += f" (lat {lat_ms}ms)"
+                self._println(m + " -> PAUSE")
+                try:
+                    run_off(); set_run_state("PAUSE")
+                except Exception:
+                    pass
+                return
+            # Break mode 'WWRITE' halts on any variable write
+            if self._break_mode == "WWRITE" and direction == "WRITE":
+                m = f"[BRK]    WRITE break at var '{name}'"
+                if lat_ms is not None:
+                    m += f" (lat {lat_ms}ms)"
+                self._println(m + " -> PAUSE")
+                try:
+                    run_off(); set_run_state("PAUSE")
+                except Exception:
+                    pass
             return
-        if name not in VARIABLE_KEYS:
+
+        # IO space: bus-focused watch using same READ/WRITE semantics
+        if self._space_mode == "IO":
+            if self._watch_mode == "READ" and direction == "READ":
+                m = "[BUS]    READ cycle"
+                if name:
+                    m += f" var='{name}'"
+                if lat_ms is not None:
+                    m += f" (lat {lat_ms}ms)"
+                self._println(m + " -> PAUSE")
+                try:
+                    run_off(); set_run_state("PAUSE")
+                except Exception:
+                    pass
+                return
+            if direction == "WRITE":
+                try:
+                    self._write_hit_in_step = True
+                except Exception:
+                    pass
+            if self._watch_mode == "WRITE" and direction == "WRITE":
+                m = "[BUS]    WRITE cycle"
+                if name:
+                    m += f" var='{name}'"
+                if lat_ms is not None:
+                    m += f" (lat {lat_ms}ms)"
+                self._println(m + " -> PAUSE")
+                try:
+                    run_off(); set_run_state("PAUSE")
+                except Exception:
+                    pass
+                return
+            if self._break_mode == "WWRITE" and direction == "WRITE":
+                m = "[BUS-BRK] WRITE cycle"
+                if name:
+                    m += f" var='{name}'"
+                if lat_ms is not None:
+                    m += f" (lat {lat_ms}ms)"
+                self._println(m + " -> PAUSE")
+                try:
+                    run_off(); set_run_state("PAUSE")
+                except Exception:
+                    pass
             return
-        # Watch mode reacts immediately (pause instead of halt)
-        if self._watch_mode == "READ" and direction == "READ":
-            self._println(f"[WATCH] READ hit at var '{name}' -> PAUSE")
-            try:
-                run_off(); set_run_state("PAUSE")
-            except Exception:
-                pass
-            return
-        if self._watch_mode == "WRITE" and direction == "WRITE":
-            self._println(f"[WATCH] WRITE hit at var '{name}' -> PAUSE")
-            try:
-                run_off(); set_run_state("PAUSE")
-            except Exception:
-                pass
-            return
-        # Break mode 'WWRITE' halts on any variable write
-        if self._break_mode == "WWRITE" and direction == "WRITE":
-            self._println(f"[BRK]    WRITE break at var '{name}' -> PAUSE")
-            try:
-                run_off(); set_run_state("PAUSE")
-            except Exception:
-                pass
 
     def _println(self, s: str) -> None:
         if self.debug:

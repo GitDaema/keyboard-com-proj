@@ -153,6 +153,8 @@ def main():
             # 인터랙티브: Enter=스텝, c=연속, q=종료 + 확장 명령(cmd)
             cpu.run()
 
+        input()
+
         # 최종 확인(빠른 요약)
         try:
             va = mem.get('a'); vx = mem.get('x'); vd = mem.get('d'); vs = mem.get('s')
