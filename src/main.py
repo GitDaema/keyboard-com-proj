@@ -137,12 +137,15 @@ def main():
 
         # 모드 선택: run(표시 중심) / run_led(패널 제어 + 기록/서비스)
         try:
-            print("[MODE] 선택: 1) run  2) run_led  (기본=run) > ", end="", flush=True)
-            choice = (input() or "").strip().lower()
+            print("[INFO] LED 게이트(run_led) 모드로 실행합니다. 제어는 모두 LED 색으로 트리거됩니다.")
+            choice = "2"
         except Exception:
             choice = ""
+        # Default to run_led when no choice is entered
+        if choice == "":
+            choice = "2"
 
-        if choice in ("2", "run_led", "led"):
+        if True:
             # LED를 스위치로 사용하는 패널 모드
             print("[INFO] LED 패널(run_led) 모드: 콘솔에서 trace/overlay/reset 등 입력 시 LED가 실제로 반영되어 제어됩니다.")
             cpu.cp_enabled = True

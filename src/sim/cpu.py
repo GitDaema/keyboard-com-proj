@@ -902,31 +902,23 @@ class CPU:
             except Exception:
                 pass
         elif s == "ehalt":
-            self.halted = True
+            # Drive ESC LED to E-HALT; run_led loop will read and act
             try:
                 set_esc_state("EHALT")
             except Exception:
                 pass
         elif s == "reset":
+            # Drive ESC to R_SOFT; run_led will read and act (no blocking)
             try:
-                set_esc_state("RESET")
+                set_esc_state("R_SOFT")
             except Exception:
                 pass
-            try:
-                self._soft_reset_visuals()
-            except Exception:
-                pass
-            self._reset_pending = True
         elif s == "reset hard":
+            # Drive ESC to R_HARD; run_led will read and act (no blocking)
             try:
-                set_esc_state("RESET")
+                set_esc_state("R_HARD")
             except Exception:
                 pass
-            try:
-                self._hard_reset(recalibrate=False)
-            except Exception:
-                pass
-            self._reset_pending = True
         elif s == "reset bus":
             try:
                 self._reset_bus()
@@ -1012,7 +1004,7 @@ class CPU:
     def run_led(self) -> None:
         """LED 而⑦듃濡??뚮젅?몄뿉 ?섑빐 寃뚯씠?낅릺???ㅽ뻾 猷⑦봽.
         grave/esc/tab/caps/left_shift ??而щ윭瑜?二쇨린?곸쑝濡??먮룆?섏뿬
-        RUN/PAUSE/HALT/RESET/STEP/?쒕퉬???숈옉???섑뻾?쒕떎.
+        RUN/PAUSE/HALT/R_SOFT/R_HARD/STEP/.. 동작을 LED 색으로 트리거합니다.
         """
         self._println("\n[RUN-LED] Starting LED-gated execution...")
         # Default to normal step mode (CONT); start paused
@@ -1021,11 +1013,11 @@ class CPU:
         except Exception:
             pass
         try:
-            set_run_state("PAUSE")
+            run_off()
         except Exception:
             pass
         try:
-            run_off()
+            set_run_state("PAUSE", use_orange_pause=True)
         except Exception:
             pass
         # Start background command reader so console can set LED states
@@ -1040,8 +1032,11 @@ class CPU:
         last_step: str | None = None
         last_trace: str | None = None
         last_overlay: str | None = None
+        # ESC RESET handled by distinct colors (R_SOFT/R_HARD) via control-plane
         # One-shot trace marker armed flag (instance-level to coordinate with watch events)
         self._trace_mark_armed = getattr(self, "_trace_mark_armed", False)
+        # Pending request to transition to RUN (avoid PAUSE block overriding RUN LED immediately)
+        self._cp_run_requested = False
         while True:
             # Drain any console commands to update LED states immediately
             try:
@@ -1079,16 +1074,41 @@ class CPU:
                     except Exception:
                         pass
                 break
-            if st.esc == "RESET" and last_esc != "RESET":
-                self._println("[CP] RESET edge -> soft reset visuals")
-                self._soft_reset_visuals()
+            # RESET via color distinction on ESC: R_HARD (cyan) / R_SOFT (blue)
+            if st.esc == "R_HARD" and last_esc != "R_HARD":
+                self._println("[CP] RESET(HARD) edge -> hard reset")
+                try:
+                    self._hard_reset(recalibrate=False)
+                except Exception:
+                    pass
                 if not getattr(self, "_cp_continuous_run", False):
                     try:
                         run_off()
                     except Exception:
                         pass
                 self._reset_pending = True
-                time.sleep(0.02)
+                try:
+                    set_esc_state("NONE")
+                except Exception:
+                    pass
+                last_esc = st.esc
+                continue
+            if st.esc == "R_SOFT" and last_esc != "R_SOFT":
+                self._println("[CP] RESET(SOFT) edge -> soft reset visuals")
+                try:
+                    self._soft_reset_visuals()
+                except Exception:
+                    pass
+                if not getattr(self, "_cp_continuous_run", False):
+                    try:
+                        run_off()
+                    except Exception:
+                        pass
+                self._reset_pending = True
+                try:
+                    set_esc_state("NONE")
+                except Exception:
+                    pass
                 last_esc = st.esc
                 continue
             last_esc = st.esc
@@ -1114,9 +1134,17 @@ class CPU:
                     pass
                 break
             if st.run == "PAUSE":
+                # Skip overriding PAUSE for one tick if RUN was just requested
+                if getattr(self, "_cp_run_requested", False):
+                    time.sleep(0.02)
+                    continue
                 try:
                     if not getattr(self, "_cp_continuous_run", False):
                         run_off()
+                except Exception:
+                    pass
+                try:
+                    set_run_state("PAUSE", use_orange_pause=True)
                 except Exception:
                     pass
                 # SERVICE overlay acts only during pause
@@ -1391,7 +1419,7 @@ class CPU:
             pass
 
     def run(self) -> None:
-        self._println("\n[RUN] Starting execution...")
+        raise NotImplementedError("run() is disabled. Use run_led() only.")
         # Show RUN when entering the run loop
         try:
             run_on()
@@ -1512,6 +1540,11 @@ class CPU:
             self._continue_run = True
             self._cp_continuous_run = True
             self._cp_single_step = False
+            # Mark that a RUN was requested to avoid PAUSE block overriding RUN LED immediately
+            try:
+                self._cp_run_requested = True
+            except Exception:
+                pass
             try:
                 run_on(); set_run_state("RUN")
             except Exception:
@@ -1541,47 +1574,23 @@ class CPU:
                 pass
             return
         if s == "ehalt":
-            self.halted = True
+            # Drive ESC LED to E-HALT; run_led loop will read and act
             try:
                 set_esc_state("EHALT")
             except Exception:
                 pass
             return
         if s == "reset":
+            # Drive ESC to R_SOFT; run_led will read and act (no blocking)
             try:
-                set_esc_state("RESET")
-            except Exception:
-                pass
-            try:
-                self._soft_reset_visuals()
-            except Exception:
-                pass
-            self._reset_pending = True
-            return
-        if s == "reset hard":
-            try:
-                set_esc_state("RESET")
-            except Exception:
-                pass
-            try:
-                self._hard_reset(recalibrate=False)
-            except Exception:
-                pass
-            self._reset_pending = True
-            return
-        if s == "reset bus":
-            try:
-                self._reset_bus()
+                set_esc_state("R_SOFT")
             except Exception:
                 pass
             return
         if s == "reset hard":
+            # Drive ESC to R_HARD; run_led will read and act (no blocking)
             try:
-                set_esc_state("RESET")
-            except Exception:
-                pass
-            try:
-                self._hard_reset(recalibrate=False)
+                set_esc_state("R_HARD")
             except Exception:
                 pass
             return

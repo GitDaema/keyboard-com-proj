@@ -5,7 +5,7 @@ Control-plane: read key LED colors and map to CPU actions.
 
 Keys and roles (by label):
   - grave: RUN/PAUSE/HALT/FAULT (fault = red blink)
-  - esc:   RESET (blue) / E-HALT (red)
+  - esc:   R_SOFT (blue) / R_HARD (cyan) / E-HALT (red)
   - tab:   Step mode (off=continuous, white=instr, pink=micro)
   - caps_lock: Trace (off=off, cyan=on, yellow=marker)
   - left_shift: Overlay/Service (yellow=ALU, blue=IRPC, purple=BUS, cyan=SERVICE)
@@ -32,7 +32,7 @@ from utils.keyboard_presets import (
 
 # ---- Enums (string Literals keep deps minimal) ----
 RunState = Literal["RUN", "PAUSE", "HALT", "FAULT"]
-EscState = Literal["NONE", "RESET", "EHALT"]
+EscState = Literal["NONE", "R_SOFT", "R_HARD", "EHALT"]
 StepMode = Literal["CONT", "INSTR", "MICRO"]
 TraceState = Literal["OFF", "ON", "MARK"]
 OverlayMode = Literal["NONE", "ALU", "IRPC", "BUS", "SERVICE"]
@@ -55,8 +55,10 @@ _PALETTE = {
     # Generic OFF black kept for fault-blink detection reference only
     # (display OFFs are per-key; see OFF_COLORS below)
     "OFF_BLACK": _rgb_tuple(cp.BLACK),
-    # esc
-    "RESET": _rgb_tuple(cp.BLUE),
+    # esc (distinct colors for soft/hard reset)
+    "R_SOFT": _rgb_tuple(cp.BLUE),
+    # Use PURPLE for hard reset to maximize separation from BLUE
+    "R_HARD": _rgb_tuple(cp.PURPLE),
     "EHALT": _rgb_tuple(cp.RED),
     # tab
     "INSTR": _rgb_tuple(cp.WHITE),
@@ -196,12 +198,23 @@ def poll() -> ControlStates:
 
     # --- esc ---
     rgb_e = _read_rgb(KEY_ESC_LABEL)
-    # nearest among red/blue/off
-    esc_sel = _nearest(
-        KEY_ESC_LABEL,
-        {"EHALT": _PALETTE["EHALT"], "RESET": _PALETTE["RESET"], "NONE": _off_color(KEY_ESC_LABEL)},
-    )
-    st.esc = esc_sel  # type: ignore[assignment]
+    # For ESC, classify using the most recent sample (edge sensitivity),
+    # not the smoothed average used by other keys.
+    esc_candidates = {
+        "EHALT": _PALETTE["EHALT"],
+        "R_HARD": _PALETTE["R_HARD"],
+        "R_SOFT": _PALETTE["R_SOFT"],
+        "NONE": _off_color(KEY_ESC_LABEL),
+    }
+    # Compute nearest by direct distance to the latest sample
+    best_k = "NONE"
+    best_d = 10 ** 12
+    for k, col in esc_candidates.items():
+        d = _d2(tuple(int(x) for x in rgb_e), col)
+        if d < best_d:
+            best_d = d
+            best_k = k
+    st.esc = best_k  # type: ignore[assignment]
 
     # --- tab ---
     _read_rgb(KEY_TAB_LABEL)
@@ -256,7 +269,7 @@ def maybe_run_service(st: ControlStates) -> bool:
 
 # ---------- Setters: code-driven switch control (like physical panel) ----------
 
-def set_run_state(state: RunState, *, use_orange_pause: bool = False) -> None:
+def set_run_state(state: RunState, *, use_orange_pause: bool = True) -> None:
     if state == "RUN":
         col = _PALETTE["RUN"]
     elif state == "HALT":
@@ -272,8 +285,10 @@ def set_run_state(state: RunState, *, use_orange_pause: bool = False) -> None:
 
 
 def set_esc_state(state: EscState) -> None:
-    if state == "RESET":
-        col = _PALETTE["RESET"]
+    if state == "R_SOFT":
+        col = _PALETTE["R_SOFT"]
+    elif state == "R_HARD":
+        col = _PALETTE["R_HARD"]
     elif state == "EHALT":
         col = _PALETTE["EHALT"]
     else:
@@ -335,7 +350,7 @@ def init_default_panel() -> None:
     - caps: OFF
     - left_shift: NONE (off)
     """
-    set_run_state("PAUSE", use_orange_pause=False)
+    set_run_state("PAUSE", use_orange_pause=True)
     set_esc_state("NONE")
     set_step_mode("CONT")
     set_trace_state("OFF")
