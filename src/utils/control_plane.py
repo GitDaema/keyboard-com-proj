@@ -52,8 +52,9 @@ _PALETTE = {
     "RUN": _rgb_tuple(cp.GREEN),
     "PAUSE": _rgb_tuple(cp.ORANGE),
     "HALT": _rgb_tuple(cp.RED),
-    # blink detection for FAULT uses HALT vs BLACK alternation
-    "OFF": _rgb_tuple(cp.BLACK),
+    # Generic OFF black kept for fault-blink detection reference only
+    # (display OFFs are per-key; see OFF_COLORS below)
+    "OFF_BLACK": _rgb_tuple(cp.BLACK),
     # esc
     "RESET": _rgb_tuple(cp.BLUE),
     "EHALT": _rgb_tuple(cp.RED),
@@ -76,9 +77,22 @@ def _d2(a: Tuple[int, int, int], b: Tuple[int, int, int]) -> int:
     return dr * dr + dg * dg + db * db
 
 
+def _avg_recent_rgb(label: str, n: int = 3) -> Tuple[int, int, int]:
+    arr = _HIST.get(label) or []
+    if not arr:
+        r, g, b = get_key_color(label, fresh=True)[0]
+        return (int(r), int(g), int(b))
+    take = arr[-max(1, n):]
+    sr = sum(int(x[1][0]) for x in take)
+    sg = sum(int(x[1][1]) for x in take)
+    sb = sum(int(x[1][2]) for x in take)
+    k = len(take)
+    return (sr // k, sg // k, sb // k)
+
+
 def _nearest(label: str, candidates: Dict[str, Tuple[int, int, int]]) -> str:
-    r, g, b = get_key_color(label, fresh=True)[0]
-    cur = (int(r), int(g), int(b))
+    # Use average of recent samples for stability (simple smoothing)
+    cur = _avg_recent_rgb(label, n=3)
     best_k = next(iter(candidates))
     best_d = 10 ** 12
     for k, col in candidates.items():
@@ -114,7 +128,8 @@ def _is_blinking_red(label: str) -> bool:
         return False
     # Consider blinking if recent samples alternate between near RED and near BLACK
     red = _PALETTE["HALT"]
-    off = _PALETTE["OFF"]
+    # Reference true-black for blink detection regardless of display OFF tint
+    off = _PALETTE["OFF_BLACK"]
     hit_red = 0
     hit_off = 0
     for _, rgb in arr[-4:]:
@@ -137,6 +152,25 @@ class ControlStates:
 _SERVICE_COOLDOWN_S = 2.0
 _last_service_ts: float | None = None
 
+# --- Per-key OFF (dim/tinted) colors for better visibility ---
+# Note: OFF_BLACK remains for internal blink detection; these are display OFFs.
+_OFF_COLORS: Dict[str, Tuple[int, int, int]] = {
+    # Run/Pause/Halt key (grave): very dim warm gray
+    RUN_PAUSE_LABEL: (20, 12, 4),
+    # ESC (reset/e-halt): very dim blue
+    KEY_ESC_LABEL: (6, 8, 18),
+    # TAB (step selector): dim neutral gray
+    KEY_TAB_LABEL: (14, 14, 14),
+    # CAPS (trace): very dim cyan
+    KEY_CAPS_LABEL: (0, 16, 16),
+    # LSHIFT (overlay/service): very dim purple
+    KEY_LSHIFT_LABEL: (14, 0, 18),
+}
+
+
+def _off_color(label: str) -> Tuple[int, int, int]:
+    return _OFF_COLORS.get(label, _PALETTE["OFF_BLACK"])  # fallback to black
+
 
 def poll() -> ControlStates:
     """Sample keys and classify their states into enums."""
@@ -150,7 +184,8 @@ def poll() -> ControlStates:
         {
             "RUN": _PALETTE["RUN"],
             "PAUSE": _PALETTE["PAUSE"],
-            "OFF": _PALETTE["OFF"],
+            # Use dim per-key OFF tint for classification
+            "OFF": _off_color(RUN_PAUSE_LABEL),
             "HALT": _PALETTE["HALT"],
         },
     )
@@ -164,7 +199,7 @@ def poll() -> ControlStates:
     # nearest among red/blue/off
     esc_sel = _nearest(
         KEY_ESC_LABEL,
-        {"EHALT": _PALETTE["EHALT"], "RESET": _PALETTE["RESET"], "NONE": _PALETTE["OFF"]},
+        {"EHALT": _PALETTE["EHALT"], "RESET": _PALETTE["RESET"], "NONE": _off_color(KEY_ESC_LABEL)},
     )
     st.esc = esc_sel  # type: ignore[assignment]
 
@@ -172,7 +207,7 @@ def poll() -> ControlStates:
     _read_rgb(KEY_TAB_LABEL)
     tab_sel = _nearest(
         KEY_TAB_LABEL,
-        {"INSTR": _PALETTE["INSTR"], "MICRO": _PALETTE["MICRO"], "CONT": _PALETTE["OFF"]},
+        {"INSTR": _PALETTE["INSTR"], "MICRO": _PALETTE["MICRO"], "CONT": _off_color(KEY_TAB_LABEL)},
     )
     st.step = tab_sel  # type: ignore[assignment]
 
@@ -180,7 +215,7 @@ def poll() -> ControlStates:
     _read_rgb(KEY_CAPS_LABEL)
     caps_sel = _nearest(
         KEY_CAPS_LABEL,
-        {"ON": _PALETTE["TRACE"], "MARK": _PALETTE["MARK"], "OFF": _PALETTE["OFF"]},
+        {"ON": _PALETTE["TRACE"], "MARK": _PALETTE["MARK"], "OFF": _off_color(KEY_CAPS_LABEL)},
     )
     st.trace = caps_sel  # type: ignore[assignment]
 
@@ -193,7 +228,7 @@ def poll() -> ControlStates:
             "IRPC": _PALETTE["IRPC"],
             "BUS": _PALETTE["BUS"],
             "SERVICE": _PALETTE["SERVICE"],
-            "NONE": _PALETTE["OFF"],
+            "NONE": _off_color(KEY_LSHIFT_LABEL),
         },
     )
     st.overlay = shift_sel  # type: ignore[assignment]
@@ -229,7 +264,7 @@ def set_run_state(state: RunState, *, use_orange_pause: bool = False) -> None:
     elif state == "FAULT":
         col = _PALETTE["HALT"]  # indicate with red; blink not handled here
     else:  # PAUSE
-        col = _PALETTE["PAUSE"] if use_orange_pause else _PALETTE["OFF"]
+        col = _PALETTE["PAUSE"] if use_orange_pause else _off_color(RUN_PAUSE_LABEL)
     try:
         set_key_color(RUN_PAUSE_LABEL, cp.RGBColor(*col))
     except Exception:
@@ -242,7 +277,7 @@ def set_esc_state(state: EscState) -> None:
     elif state == "EHALT":
         col = _PALETTE["EHALT"]
     else:
-        col = _PALETTE["OFF"]
+        col = _off_color(KEY_ESC_LABEL)
     try:
         set_key_color(KEY_ESC_LABEL, cp.RGBColor(*col))
     except Exception:
@@ -255,7 +290,7 @@ def set_step_mode(mode: StepMode) -> None:
     elif mode == "MICRO":
         col = _PALETTE["MICRO"]
     else:
-        col = _PALETTE["OFF"]
+        col = _off_color(KEY_TAB_LABEL)
     try:
         set_key_color(KEY_TAB_LABEL, cp.RGBColor(*col))
     except Exception:
@@ -268,7 +303,7 @@ def set_trace_state(state: TraceState) -> None:
     elif state == "MARK":
         col = _PALETTE["MARK"]
     else:
-        col = _PALETTE["OFF"]
+        col = _off_color(KEY_CAPS_LABEL)
     try:
         set_key_color(KEY_CAPS_LABEL, cp.RGBColor(*col))
     except Exception:
@@ -285,7 +320,7 @@ def set_overlay_mode(mode: OverlayMode) -> None:
     elif mode == "SERVICE":
         col = _PALETTE["SERVICE"]
     else:
-        col = _PALETTE["OFF"]
+        col = _off_color(KEY_LSHIFT_LABEL)
     try:
         set_key_color(KEY_LSHIFT_LABEL, cp.RGBColor(*col))
     except Exception:

@@ -135,6 +135,146 @@ class CPU:
         self._write_hit_in_step: bool = False
         # One-shot trace marker (caps MARK) state
         self._trace_mark_armed: bool = False
+        # Keep original and expanded source to allow runtime ISA<->micro switching
+        self._source_lines: List[str] = []
+        self._expanded_lines: List[str] = []
+        # PC mapping tables between micro-line index and ISA PC index
+        self._map_micro_to_isa: List[int] = []
+        self._map_isa_to_micro: List[int] = []
+
+    def _build_pc_maps(self) -> None:
+        """Build mappings between micro "executable" lines (labels removed)
+        and ISA PCs so that switching modes preserves the current position.
+
+        We must align micro indices with ProgramMemory.exec_lines indexing
+        (label-only lines don't consume addresses). To do this, compact the
+        expanded source by skipping label-only lines when building maps.
+
+        - For each executable micro line j (corresponding expanded index i),
+          compute how many ISA instructions it emits (k).
+        - map_micro_to_isa[j] = cumulative ISA index at start of that line
+          (or -1 if k==0)
+        - map_isa_to_micro[pc] = executable micro line index j that produced
+          this ISA instruction
+        """
+        # Build list of expanded indices that are executable (not label-only)
+        exec_indices: list[int] = []
+        for i, raw in enumerate(self._expanded_lines):
+            s = (raw or "").strip()
+            if s.endswith(":") and (":" not in s[:-1]):
+                # label-only line; does not consume an executable micro PC
+                continue
+            exec_indices.append(i)
+
+        self._map_micro_to_isa = [-1] * len(exec_indices)
+        self._map_isa_to_micro = []
+        pc_acc = 0
+        for j, i in enumerate(exec_indices):
+            line = self._expanded_lines[i]
+            try:
+                isa_chunk = assemble_program([line], debug=False)
+            except Exception:
+                isa_chunk = []
+            k = len(isa_chunk)
+            if k > 0:
+                self._map_micro_to_isa[j] = pc_acc
+                for _ in range(k):
+                    self._map_isa_to_micro.append(j)
+                pc_acc += k
+        # If overall ISA size differs (e.g., multi-line expansion nuances), pad conservatively
+        try:
+            isa_len = len(self._isa)
+        except Exception:
+            isa_len = len(self._map_isa_to_micro)
+        while len(self._map_isa_to_micro) < isa_len:
+            # Fallback to last executable line if any, else 0
+            fallback = max(0, len(exec_indices) - 1)
+            self._map_isa_to_micro.append(fallback)
+
+    def _enter_micro_mode(self) -> None:
+        """Switch to micro-line stepping at runtime.
+        Ensures program memory is populated and PC is valid.
+        """
+        prev_isa = self.use_isa
+        try:
+            need_load = False
+            try:
+                # ProgramMemory may expose size(); otherwise probe fetch(0)
+                need_load = (self.prog.fetch(0) is None)
+            except Exception:
+                need_load = True
+            if need_load and self._expanded_lines:
+                self.prog.load_program(self._expanded_lines)
+        except Exception:
+            pass
+        # Map current ISA PC to nearest micro line if coming from ISA
+        try:
+            if prev_isa and self._map_isa_to_micro:
+                cur = int(self.pc.value)
+                cur = max(0, min(cur, len(self._map_isa_to_micro) - 1))
+                self.pc.value = int(self._map_isa_to_micro[cur])
+                self.halted = False
+            else:
+                # Clamp to executable micro lines (labels removed)
+                try:
+                    n_exec = self.prog.size()
+                except Exception:
+                    # Fallback: estimate from expanded by excluding label-only lines
+                    n_exec = 0
+                    for raw in self._expanded_lines:
+                        s = (raw or "").strip()
+                        if s.endswith(":") and (":" not in s[:-1]):
+                            continue
+                        n_exec += 1
+                if n_exec > 0 and (self.pc.value < 0 or self.pc.value >= n_exec):
+                    self.pc.value = 0
+                    self.halted = False
+        except Exception:
+            pass
+        # finally switch mode flag
+        self.use_isa = False
+
+    def _enter_instr_mode(self) -> None:
+        """Switch to ISA stepping at runtime; ensure ISA stream exists and PC valid."""
+        prev_isa = self.use_isa
+        try:
+            if not self._isa and self._source_lines:
+                self._isa = assemble_program(self._source_lines, debug=False)
+        except Exception:
+            pass
+        # Map current micro line to nearest ISA PC when coming from micro
+        try:
+            if (not prev_isa) and self._map_micro_to_isa:
+                ml = int(self.pc.value)
+                # If this line emitted no ISA, scan backward then forward for nearest mapped line
+                target = -1
+                if 0 <= ml < len(self._map_micro_to_isa):
+                    target = self._map_micro_to_isa[ml]
+                if target is None or target < 0:
+                    j = ml - 1
+                    while j >= 0 and self._map_micro_to_isa[j] < 0:
+                        j -= 1
+                    if j >= 0:
+                        target = self._map_micro_to_isa[j]
+                if (target is None or target < 0) and len(self._expanded_lines) > 0:
+                    j = ml + 1
+                    while j < len(self._map_micro_to_isa) and self._map_micro_to_isa[j] < 0:
+                        j += 1
+                    if j < len(self._map_micro_to_isa):
+                        target = self._map_micro_to_isa[j]
+                if target is None or target < 0:
+                    target = 0
+                self.pc.value = int(target)
+                self.halted = False
+            else:
+                n = len(self._isa)
+                if n > 0 and (self.pc.value < 0 or self.pc.value >= n):
+                    self.pc.value = 0
+                    self.halted = False
+        except Exception:
+            pass
+        # finally switch mode flag
+        self.use_isa = True
 
     def _maybe_watch_prog_event(self, kind: str) -> None:
         """Apply watch/break semantics for program space (IR/PC) when overlay=IRPC.
@@ -169,6 +309,15 @@ class CPU:
     # ---------- ?몃? API ----------
     def load_program(self, lines: List[str], *, debug: bool | None = None) -> None:
         dbg = self.debug if debug is None else bool(debug)
+        # Preserve originals for runtime switching
+        try:
+            self._source_lines = list(lines)
+        except Exception:
+            self._source_lines = lines
+        try:
+            self._expanded_lines = preprocess_program(lines)
+        except Exception:
+            self._expanded_lines = list(lines)
         if self.use_isa:
             # Assemble into ISA stream (2-byte per insn)
             try:
@@ -182,6 +331,11 @@ class CPU:
             except Exception:
                 expanded = lines
             self.prog.load_program(expanded)
+        # Rebuild PC mapping after both representations updated
+        try:
+            self._build_pc_maps()
+        except Exception:
+            pass
         self.pc.reset()
         self.halted = False
         self.ir.clear()
@@ -320,6 +474,18 @@ class CPU:
             except Exception:
                 pass
             self._println(f"[FETCH] PC={cur_pc:02d}  insn='{insn.text}' | op={insn.op4:X} dst={insn.dst4:X} arg={insn.arg8:02X}")
+
+            # Guard: assembler fallback NOP for unsupported/garbled source lines
+            # Text "NOP ; <src>" indicates an invalid line was lowered to NOP.
+            try:
+                if insn.op4 == OPCODES["NOP"] and isinstance(insn.text, str) and insn.text.upper().startswith("NOP ;"):
+                    # Treat as a hardware fault rather than silently skipping
+                    self._trap_fault("ISA invalid line", ValueError(insn.text))
+                    return False
+            except Exception:
+                # Do not crash if trap handler raises; still halt
+                self.halted = True
+                return False
 
             # DECODE stage (read IR back)
             try:
@@ -772,8 +938,8 @@ class CPU:
             except Exception:
                 pass
             try:
-                # Switch to ISA instruction stepping
-                self.use_isa = True
+                # Switch to ISA instruction stepping (ensure stream/PC valid)
+                self._enter_instr_mode()
             except Exception:
                 pass
         elif s == "micro" or s == "mi":
@@ -782,8 +948,8 @@ class CPU:
             except Exception:
                 pass
             try:
-                # Switch to legacy micro-line stepping
-                self.use_isa = False
+                # Switch to legacy micro-line stepping (populate program memory if needed)
+                self._enter_micro_mode()
             except Exception:
                 pass
         elif s == "cont":
@@ -970,7 +1136,14 @@ class CPU:
             if st.step == "INSTR":
                 # Reset per-step write flag before executing a step
                 self._write_hit_in_step = False
-                cont = self.step()
+                try:
+                    cont = self.step()
+                except Exception as ex:
+                    try:
+                        self._trap_fault("LED INSTR step", ex)
+                    except Exception:
+                        pass
+                    break
                 # Trace gate
                 try:
                     if st.trace == "ON" or self._trace_mark_armed:
@@ -1006,7 +1179,14 @@ class CPU:
             elif st.step == "MICRO":
                 # Micro mode; execute one ISA step (or micro) and honor continuous-run
                 self._write_hit_in_step = False
-                cont = self.step()
+                try:
+                    cont = self.step()
+                except Exception as ex:
+                    try:
+                        self._trap_fault("LED MICRO step", ex)
+                    except Exception:
+                        pass
+                    break
                 try:
                     if st.trace == "ON" or self._trace_mark_armed:
                         marker_now = bool(self._trace_mark_armed and self._write_hit_in_step)
@@ -1040,7 +1220,14 @@ class CPU:
                 continue
             else:  # CONT
                 self._write_hit_in_step = False
-                cont = self.step()
+                try:
+                    cont = self.step()
+                except Exception as ex:
+                    try:
+                        self._trap_fault("LED CONT step", ex)
+                    except Exception:
+                        pass
+                    break
                 try:
                     if st.trace == "ON" or self._trace_mark_armed:
                         marker_now = bool(self._trace_mark_armed and self._write_hit_in_step)
@@ -1216,8 +1403,18 @@ class CPU:
                 self._start_cmd_reader()
         except Exception:
             pass
-        while self.step():
-            pass
+        while True:
+            try:
+                cont = self.step()
+            except Exception as ex:
+                # Hardware-centric trap: latch HALT, report reason, keep process alive
+                try:
+                    self._trap_fault("RUN step", ex)
+                except Exception:
+                    pass
+                break
+            if not cont:
+                break
         # ?ㅽ뻾 醫낅즺 利됱떆 ?④퀎 ?쒖떆 ?뚮벑(WRITEBACK ?ы븿)
         try:
             clear_stages()
@@ -1400,7 +1597,7 @@ class CPU:
             except Exception:
                 pass
             try:
-                self.use_isa = True
+                self._enter_instr_mode()
             except Exception:
                 pass
             return
@@ -1413,21 +1610,21 @@ class CPU:
                 arg = ""
             try:
                 if arg.startswith("instr"):
-                    set_step_mode("INSTR"); self.use_isa = True
+                    set_step_mode("INSTR"); self._enter_instr_mode()
                 elif arg.startswith("micro") or arg.startswith("mi"):
-                    set_step_mode("MICRO"); self.use_isa = False
+                    set_step_mode("MICRO"); self._enter_micro_mode()
                 elif arg.startswith("cont"):
                     set_step_mode("CONT")
                 else:
                     # default to INSTR if unspecified/unknown
-                    set_step_mode("INSTR"); self.use_isa = True
+                    set_step_mode("INSTR"); self._enter_instr_mode()
             except Exception:
                 pass
             return
         if s in ("micro", "mi"):
             try:
                 # Only switch step mode; don't force RUN here. Also toggle to micro interpreter.
-                set_step_mode("MICRO"); self.use_isa = False
+                set_step_mode("MICRO"); self._enter_micro_mode()
             except Exception:
                 pass
             return
@@ -2069,6 +2266,36 @@ class CPU:
         # Ensure PAUSE on HALT
         try:
             run_off()
+        except Exception:
+            pass
+
+    # ---- Fault trap: convert unexpected exceptions into a latched HALT ----
+    def _trap_fault(self, where: str, ex: Exception) -> None:
+        """Hardware-centric fault handling: do not crash the host process.
+        - Latch HALT, print compact reason and current PC/op context
+        - Best-effort update panel to HALT (red), but keep power on
+        """
+        self.halted = True
+        # Summarize context
+        try:
+            pc_s = f"PC={int(self.pc.value):02d}"
+        except Exception:
+            pc_s = "PC=?"
+        try:
+            dec = getattr(self.ir, "decoded", None)
+            opctx = f" op={str(dec[0])} args={dec[1]}" if dec else ""
+        except Exception:
+            opctx = ""
+        msg = f"[FAULT] {where} -> HALT | {pc_s}{opctx} | {ex.__class__.__name__}: {ex}"
+        try:
+            self._println(msg)
+        except Exception:
+            pass
+        # Indicate HALT on the panel (do not toggle power)
+        try:
+            from utils.control_plane import set_run_state
+            run_off()
+            set_run_state("HALT")
         except Exception:
             pass
 
