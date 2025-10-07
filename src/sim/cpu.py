@@ -1032,6 +1032,8 @@ class CPU:
         last_step: str | None = None
         last_trace: str | None = None
         last_overlay: str | None = None
+        # Preserve final panel state after termination (e.g., FAULT/HALT)
+        self._preserve_last_panel = False
         # ESC RESET handled by distinct colors (R_SOFT/R_HARD) via control-plane
         # One-shot trace marker armed flag (instance-level to coordinate with watch events)
         self._trace_mark_armed = getattr(self, "_trace_mark_armed", False)
@@ -1067,12 +1069,11 @@ class CPU:
             if st.esc == "EHALT" and last_esc != "EHALT":
                 self._println("[CP] E-HALT edge -> HALT")
                 self.halted = True
-                # Single-step returns to PAUSE; continuous-run keeps RUN
-                if not getattr(self, "_cp_continuous_run", False):
-                    try:
-                        run_off()
-                    except Exception:
-                        pass
+                # Preserve panel to reflect emergency halt state
+                try:
+                    self._preserve_last_panel = True
+                except Exception:
+                    pass
                 break
             # RESET via color distinction on ESC: R_HARD (cyan) / R_SOFT (blue)
             if st.esc == "R_HARD" and last_esc != "R_HARD":
@@ -1128,8 +1129,9 @@ class CPU:
             # 二??곹깭(RUN/PAUSE/HALT/FAULT)
             if st.run in ("HALT", "FAULT"):
                 self.halted = True
+                # Preserve the last shown panel state (e.g., FAULT red)
                 try:
-                    run_off()
+                    self._preserve_last_panel = True
                 except Exception:
                     pass
                 break
@@ -1286,8 +1288,10 @@ class CPU:
         except Exception:
             pass
         self._println("[RUN] Execution finished.\n")
+        # Preserve final panel state on faults/halts; otherwise, turn off RUN indicator
         try:
-            run_off()
+            if not getattr(self, "_preserve_last_panel", False):
+                run_off()
         except Exception:
             pass
 
@@ -2295,16 +2299,31 @@ class CPU:
             opctx = f" op={str(dec[0])} args={dec[1]}" if dec else ""
         except Exception:
             opctx = ""
-        msg = f"[FAULT] {where} -> HALT | {pc_s}{opctx} | {ex.__class__.__name__}: {ex}"
+        # Special-case bus ACK failures to indicate FAULT instead of HALT
+        ex_name = ex.__class__.__name__
+        ex_text = str(ex)
+        is_bus_ack_fail = ("BUS_ACK_FAIL" in ex_name) or ("BUS_ACK_FAIL" in ex_text)
+        state_label = "FAULT" if is_bus_ack_fail else "HALT"
+        prefix = "[BUS FAULT]" if is_bus_ack_fail else "[FAULT]"
+        msg = f"{prefix} {where} -> {state_label} | {pc_s}{opctx} | {ex_name}: {ex}"
         try:
             self._println(msg)
         except Exception:
             pass
-        # Indicate HALT on the panel (do not toggle power)
+        # Indicate FAULT/HALT on the panel (do not toggle power)
         try:
             from utils.control_plane import set_run_state
             run_off()
-            set_run_state("HALT")
+            set_run_state("FAULT" if is_bus_ack_fail else "HALT")
+            # Preserve final panel state so "Execution finished" does not clear grave
+            try:
+                self._preserve_last_panel = True
+            except Exception:
+                # Fallback to setattr in case attribute is missing in this context
+                try:
+                    setattr(self, "_preserve_last_panel", True)
+                except Exception:
+                    pass
         except Exception:
             pass
 

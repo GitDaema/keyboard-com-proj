@@ -14,6 +14,7 @@ OpenRGB 서버(127.0.0.1:6742)에 연결하여 키보드 LED를 초기화하고,
 """
 
 import time
+import os
 from rgb_controller import connect, disconnect, set_key_color, get_key_color, init_all_keys
 from utils.bitgroups import set_group_value, get_group_value, copy_group_value
 import utils.keyboard_presets as kp
@@ -134,6 +135,49 @@ def main():
 
         # 실행
         cpu.load_program(program, debug=True)
+
+        # --- DEMO: Force bus ACK failure to verify FAULT latch ---
+        do_demo = False
+        try:
+            # Environment override: set ACK_FAIL_DEMO=1 to auto-run
+            do_demo = str(os.environ.get("ACK_FAIL_DEMO", "")).strip().lower() in ("1", "y", "yes", "true")
+        except Exception:
+            do_demo = False
+        # Interactive demo prompt disabled for non-interactive safety
+        if False and not do_demo:
+            try:
+                print("[DEMO] 버스 ACK 실패 데모를 실행할까요? (y/N)")
+                ans = input().strip().lower()
+                do_demo = ans in ("y", "yes")
+            except Exception:
+                do_demo = False
+
+        if do_demo:
+            try:
+                # Make ACK wait for an external source that never arrives
+                bus.ack_mode = "external"
+                bus.ack_timeout_ms = 80  # quick timeout for demo
+                print("[DEMO] ack_mode=external, ack_timeout_ms=80 -> 의도적으로 ACK를 받지 못하게 합니다.")
+            except Exception:
+                pass
+            try:
+                # Auto-run so the first variable write triggers the bus failure immediately
+                cpu.cp_enabled = True
+                cpu._cmd_q.put("run")  # continuous run
+                print("[DEMO] 자동으로 run을 트리거합니다. 곧 ACK 실패 → FAULT로 정지해야 합니다.")
+            except Exception:
+                pass
+            try:
+                cpu.run_led()
+            except Exception:
+                # Any unexpected exception: keep the panel state for inspection
+                pass
+            try:
+                print("[DEMO] 데모 종료. grave 키가 빨강(FAULT/HALT)으로 표시되는지 확인하세요. Enter를 누르면 종료합니다.")
+                input()
+            except Exception:
+                pass
+            return
 
         # 모드 선택: run(표시 중심) / run_led(패널 제어 + 기록/서비스)
         try:
