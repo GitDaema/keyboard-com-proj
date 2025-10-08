@@ -17,10 +17,11 @@ so it won’t disturb other parts of the system.
 """
 
 from typing import Dict, Iterable, Optional, Set, Tuple
+import os
 
 from openrgb.utils import RGBColor
 
-from rgb_controller import set_labels_atomic
+from rgb_controller import set_labels_atomic, set_key_color
 import utils.color_presets as cp
 
 
@@ -54,6 +55,16 @@ CATEGORY_COLOR: Dict[str, RGBColor] = {
 
 OFF_COLOR: RGBColor = cp.DARK_GRAY
 
+# Debug toggle: env default, runtime override via set_op_block_debug()
+_OP_DEBUG: bool = (
+    str(os.environ.get("OP_BLOCK_DEBUG", "")).strip().lower() in ("1", "true", "y", "yes")
+    or str(os.environ.get("RGB_ATOMIC_DEBUG", "")).strip().lower() in ("1", "true", "y", "yes")
+)
+
+def set_op_block_debug(on: bool) -> None:
+    global _OP_DEBUG
+    _OP_DEBUG = bool(on)
+
 
 def _set_grid(lit: Iterable[int], color: RGBColor) -> bool:
     """Apply colors to the 3x3 group in one atomic update.
@@ -64,7 +75,28 @@ def _set_grid(lit: Iterable[int], color: RGBColor) -> bool:
     label_to_color: Dict[str, RGBColor] = {}
     for idx, lbl in IDX_TO_LABEL.items():
         label_to_color[lbl] = color if idx in lit_set else OFF_COLOR
-    return set_labels_atomic(label_to_color)
+    if _OP_DEBUG:
+        try:
+            pairs = {lbl: (col.red, col.green, col.blue) for lbl, col in label_to_color.items()}
+            print(f"[OP-BLOCK] payload={pairs}")
+        except Exception:
+            pass
+    ok = False
+    try:
+        ok = set_labels_atomic(label_to_color)
+    except Exception:
+        ok = False
+    if not ok:
+        # Fallback: per-label set (best-effort)
+        any_ok = False
+        for lbl, col in label_to_color.items():
+            try:
+                if set_key_color(lbl, col):
+                    any_ok = True
+            except Exception:
+                pass
+        ok = any_ok
+    return ok
 
 
 # --- Shape dictionary: operation token -> (category, lit indices) ---
@@ -131,11 +163,26 @@ def display_operator(op: str, *, color_override: Optional[RGBColor] = None) -> b
     key = (op or "").strip().lower()
     cat, idxs = OP_SHAPES.get(key, ("logic", {5}))
     col = color_override or CATEGORY_COLOR.get(cat, cp.WHITE)
-    return _set_grid(idxs, col)
+    if _OP_DEBUG:
+        try:
+            labels = [IDX_TO_LABEL[i] for i in sorted(idxs) if i in IDX_TO_LABEL]
+            print(
+                f"[OP-BLOCK] op='{op}' key='{key}' cat='{cat}' color=({col.red},{col.green},{col.blue}) idxs={sorted(idxs)} labels={labels}"
+            )
+        except Exception:
+            pass
+    ok = _set_grid(idxs, col)
+    if _OP_DEBUG:
+        try:
+            print(f"[OP-BLOCK] applied={ok}")
+        except Exception:
+            pass
+    return ok
 
 
 __all__ = [
     "display_operator",
     "IDX_TO_LABEL",
     "CATEGORY_COLOR",
+    "set_op_block_debug",
 ]

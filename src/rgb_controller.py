@@ -12,6 +12,14 @@ client: Optional[OpenRGBClient] = None
 kb = None
 km: Optional[RGBLabelController] = None
 
+# Runtime debug toggle for atomic updates (default: False)
+_ATOMIC_DEBUG: bool = False
+
+def set_atomic_debug(on: bool) -> None:
+    """Enable/disable verbose logs inside set_labels_atomic without env vars."""
+    global _ATOMIC_DEBUG
+    _ATOMIC_DEBUG = bool(on)
+
 # --- 내부 유틸 ---
 
 def _refresh_device_leds(dev=None):
@@ -66,6 +74,20 @@ def connect():
             print(f"[WARN] Stage labels missing in map: {missing}")
         else:
             print("[INFO] Stage labels mapped:", {k: km.label_to_index[k] for k in stage_keys})
+    except Exception:
+        pass
+
+    # Optional: dump 3x3 operator block mapping for debugging
+    try:
+        import os
+        dbg = str(os.environ.get("OP_BLOCK_DEBUG", "")).strip().lower() in ("1", "true", "y", "yes")
+        dbg = dbg or (str(os.environ.get("RGB_ATOMIC_DEBUG", "")).strip().lower() in ("1", "true", "y", "yes"))
+        if dbg:
+            op_labels = [
+                'delete','end','page_down','insert','home','page_up','print_screen','scroll_lock','pause_break'
+            ]
+            mapping = {lab: km.label_to_index.get(lab, None) for lab in op_labels}
+            print(f"[OP-BLOCK] label->index {mapping}")
     except Exception:
         pass
     
@@ -226,13 +248,38 @@ def set_labels_atomic(label_to_color: Dict[str, RGBColor]) -> bool:
         # colors 원본 확보
         colors: List[RGBColor] = [led.color for led in device.leds]
 
+        # 상세 디버그 출력 토글 (환경변수 RGB_ATOMIC_DEBUG=1|true|yes|y)
+        dbg = False
+        try:
+            import os
+            dbg = str(os.environ.get("RGB_ATOMIC_DEBUG", "")).strip().lower() in ("1", "true", "y", "yes")
+        except Exception:
+            dbg = False
+        # Runtime override (no env needed)
+        try:
+            if _ATOMIC_DEBUG:
+                dbg = True
+        except Exception:
+            pass
+
         changes: List[Tuple[int, RGBColor]] = []
         for lab, col in label_to_color.items():
-            idx = km.label_to_index.get(lab.lower())
+            key = lab.lower()
+            idx = km.label_to_index.get(key)
             if idx is None or not (0 <= idx < len(colors)):
+                if dbg:
+                    try:
+                        print(f"[RGB-ATOMIC] resolve-miss label='{lab}' -> idx=None (leds={len(colors)})")
+                    except Exception:
+                        pass
                 continue
             colors[idx] = col
             changes.append((idx, col))
+            if dbg:
+                try:
+                    print(f"[RGB-ATOMIC] plan idx={idx} label='{lab}' color=({col.red},{col.green},{col.blue})")
+                except Exception:
+                    pass
 
         if not changes:
             try:
@@ -245,8 +292,13 @@ def set_labels_atomic(label_to_color: Dict[str, RGBColor]) -> bool:
         try:
             device.set_colors(colors)
             ok = True
-        except Exception:
+        except Exception as ex:
             ok = False
+            if dbg:
+                try:
+                    print(f"[RGB-ATOMIC] device.set_colors failed: {ex}")
+                except Exception:
+                    pass
 
         # 안전 확보: 변경된 키는 개별로도 한 번 더 적용
         ok_any = False
@@ -254,12 +306,56 @@ def set_labels_atomic(label_to_color: Dict[str, RGBColor]) -> bool:
             try:
                 device.leds[idx].set_color(col)
                 ok_any = True
-            except Exception:
-                pass
+            except Exception as ex:
+                if dbg:
+                    try:
+                        print(f"[RGB-ATOMIC] per-key set fail idx={idx}: {ex}")
+                    except Exception:
+                        pass
 
         if ok or ok_any:
             time.sleep(0.02)
+            if dbg:
+                try:
+                    mode = "batch" if ok else "per-key"
+                    print(f"[RGB-ATOMIC] applied via {mode}; changes={len(changes)}")
+                except Exception:
+                    pass
             return True
+        # Final fallback: use label-driven km.set for each entry
+        applied = False
+        for lab, col in label_to_color.items():
+            try:
+                if km.set(lab, col):
+                    applied = True
+                    if dbg:
+                        try:
+                            print(f"[RGB-ATOMIC] fallback km.set ok label='{lab}'")
+                        except Exception:
+                            pass
+            except Exception as ex2:
+                if dbg:
+                    try:
+                        print(f"[RGB-ATOMIC] fallback km.set fail label='{lab}': {ex2}")
+                    except Exception:
+                        pass
+        if applied:
+            try:
+                time.sleep(0.02)
+            except Exception:
+                pass
+            return True
+        if dbg:
+            try:
+                print("[RGB-ATOMIC] apply failed; no changes took effect")
+            except Exception:
+                pass
         return False
-    except Exception:
+    except Exception as ex:
+        try:
+            import os
+            if str(os.environ.get("RGB_ATOMIC_DEBUG", "")).strip().lower() in ("1", "true", "y", "yes"):
+                print(f"[RGB-ATOMIC] exception: {ex}")
+        except Exception:
+            pass
         return False

@@ -6,7 +6,7 @@ from queue import Queue, Empty
 
 from utils.keyboard_presets import FLAG_LABELS, BINARY_COLORS
 import utils.color_presets as cp
-from rgb_controller import set_key_color
+from rgb_controller import set_key_color, set_atomic_debug
 from utils.stage_indicator import post_stage, clear_stages
 from utils.ir_indicator import update_from_decoded, clear_ir, encode_from_source_line_fixed, set_ir, read_ir
 from utils.ir_indicator import calibrate_ir
@@ -38,6 +38,7 @@ from utils.bit_lut import (
 )
 from utils.keyboard_presets import SRC1, SRC2, RES
 from utils.keyboard_presets import VARIABLE_KEYS, BUS_ADDR_VALID, BUS_RD, BUS_WR, BUS_ACK
+from utils.operator_indicator import display_operator, set_op_block_debug
 
 
 """
@@ -832,7 +833,7 @@ class CPU:
         prompt = (
             "[step] Enter=step | c/run/r/continue=continue | p/pause=pause | h/halt=halt | ehalt | "
             "reset | reset hard | reset bus | "
-            "s/step/instr (ISA) | mi/micro (micro-lines) | cont (mode only) | trace on/off/mark | overlay alu/irpc/bus/service/none | q=quit > "
+            "s/step/instr (ISA) | mi/micro (micro-lines) | cont (mode only) | trace on/off/mark | overlay alu/irpc/bus/service/none | op <tok> | debug all|rgb|op on|off | q=quit > "
         )
         try:
             print(prompt, end="", flush=True)
@@ -984,6 +985,42 @@ class CPU:
                     set_overlay_mode("NONE")
             except Exception:
                 pass
+        elif s.startswith("op"):
+            # Example: 'op +', 'op==', 'op rol', 'op off'
+            # Robust parse: allow with/without space after 'op'
+            rest = s[2:].strip()
+            tok = rest
+            if tok == "" and (" " in s):
+                try:
+                    _, arg = (s + " ").split(" ", 1)
+                    tok = (arg or "").strip()
+                except Exception:
+                    tok = ""
+            try:
+                if tok == "" or tok in ("off", "clear"):
+                    display_operator("nop")
+                else:
+                    display_operator(tok)
+                self._println(f"[OP] request token='{tok or 'nop'}'")
+            except Exception:
+                pass
+        elif s.startswith("debug"):
+            # debug all|rgb|op on|off (robust to extra/missing spaces)
+            rest = s[len("debug"):].strip()
+            parts = [p for p in rest.split(" ") if p]
+            if len(parts) < 2:
+                self._println("[DBG] usage: debug all|rgb|op on|off")
+                return
+            kind, onoff = parts[0].strip(), parts[1].strip()
+            val = onoff.lower().startswith("on")
+            try:
+                if kind in ("all", "rgb"):
+                    set_atomic_debug(val)
+                if kind in ("all", "op"):
+                    set_op_block_debug(val)
+                self._println(f"[DBG] set {kind or 'all'} debug -> {'ON' if val else 'OFF'}")
+            except Exception:
+                pass
         else:
             # Single-step resume: turn RUN on; next pause will turn it off again
             try:
@@ -1063,6 +1100,10 @@ class CPU:
                 if st.overlay != last_overlay:
                     self._println(f"[CP] OVERLAY {last_overlay or '-'} -> {st.overlay}")
                     last_overlay = st.overlay
+                    try:
+                        self._overlay_mode = st.overlay
+                    except Exception:
+                        pass
             except Exception:
                 pass
             # ESC edge-trigger handling (momentary)
@@ -1684,6 +1725,53 @@ class CPU:
             except Exception:
                 pass
             return
+        if s.startswith("op"):
+            # Allow 'op+' or 'op +' forms
+            rest = s[2:].strip()
+            tok = rest
+            if tok == "" and (" " in s):
+                try:
+                    _, arg = (s + " ").split(" ", 1)
+                    tok = (arg or "").strip()
+                except Exception:
+                    tok = ""
+            # Special introspection command: 'op map' -> dump 3x3 mapping
+            if tok in ("map", "mapping"):
+                try:
+                    from rgb_controller import km
+                    labels = ['delete','end','page_down','insert','home','page_up','print_screen','scroll_lock','pause_break']
+                    mapping = {lab: (None if km is None else km.label_to_index.get(lab)) for lab in labels}
+                    self._println(f"[OP] mapping label->index {mapping}")
+                except Exception:
+                    pass
+                return
+            try:
+                if tok == "" or tok in ("off", "clear"):
+                    display_operator("nop")
+                else:
+                    display_operator(tok)
+                self._println(f"[OP] request token='{tok or 'nop'}'")
+            except Exception:
+                pass
+            return
+        if s.startswith("debug"):
+            # debug all|rgb|op on|off (robust parse)
+            rest = s[len("debug"):].strip()
+            parts = [p for p in rest.split(" ") if p]
+            if len(parts) < 2:
+                self._println("[DBG] usage: debug all|rgb|op on|off")
+                return
+            kind, onoff = parts[0].strip(), parts[1].strip()
+            val = onoff.lower().startswith("on")
+            try:
+                if kind in ("all", "rgb"):
+                    set_atomic_debug(val)
+                if kind in ("all", "op"):
+                    set_op_block_debug(val)
+                self._println(f"[DBG] set {kind or 'all'} debug -> {'ON' if val else 'OFF'}")
+            except Exception:
+                pass
+            return
         try:
             run_on(); set_run_state("RUN")
         except Exception:
@@ -2216,6 +2304,11 @@ class CPU:
         except Exception:
             pass
         self._println(f"[EXEC]   {desc}")
+        # If ALU overlay is active, depict current operator on 3x3 block
+        try:
+            self._maybe_show_operator(desc)
+        except Exception:
+            pass
 
     def _on_writeback(self, changes: Dict[str, int]) -> None:
         if changes:
@@ -2256,6 +2349,54 @@ class CPU:
         self._println(f"[PC]     {old:02d} -> {new:02d}")
         try:
             self._maybe_watch_prog_event("PC_WRITE")
+        except Exception:
+            pass
+
+    # --- Operator LED linkage (always-on) ---
+    _last_op_token_shown: Optional[str] = None  # type: ignore[assignment]
+
+    def _maybe_show_operator(self, exec_desc: str) -> None:
+        # Always depict operator (no overlay gating)
+        # Parse mnemonic from exec description (first token)
+        m = (exec_desc or "").strip().split(" ", 1)[0].upper()
+        # Map mnemonics to operator-indicator tokens (simple, intentional)
+        tok = None
+        if m in ("MOV", "MOVI"):
+            tok = "="
+        elif m in ("ADD", "ADDI"):
+            tok = "+"
+        elif m in ("SUB", "SUBI", "NEG"):
+            tok = "-"
+        elif m == "AND":
+            tok = "&"
+        elif m == "OR":
+            tok = "|"
+        elif m == "XOR":
+            tok = "^"
+        elif m == "SHL":
+            tok = "<<"
+        elif m == "SHR":
+            tok = ">>"
+        elif m in ("CMP", "CMPI"):
+            tok = "=="
+        elif m == "BEQ":
+            tok = "=="
+        elif m == "BNE":
+            tok = "!="
+        elif m == "BMI":  # negative -> less than 0
+            tok = "<"
+        elif m == "BPL":  # non-negative -> >= 0
+            tok = ">="
+        else:
+            tok = None
+
+        if tok is None:
+            return
+        if tok == self._last_op_token_shown:
+            return
+        try:
+            display_operator(tok)
+            self._last_op_token_shown = tok
         except Exception:
             pass
 
