@@ -50,7 +50,11 @@ def add8_via_lut(mem, *, src1: Sequence[str] = SRC1, src2: Sequence[str] = SRC2,
     """
     idx_range = range(0, 8) if lsb_first else range(7, -1, -1)
 
-    cin = "0"
+    try:
+        mem.set(STEP_LABELS["CIN"], 0)
+        cin = "0" if int(mem.get(STEP_LABELS["CIN"])) == 0 else "1"
+    except Exception:
+        cin = "0"
     for i in idx_range:
         a = _to_bit_str(mem.get(src1[i]))
         b = _to_bit_str(mem.get(src2[i]))
@@ -62,15 +66,17 @@ def add8_via_lut(mem, *, src1: Sequence[str] = SRC1, src2: Sequence[str] = SRC2,
             mem.set(STEP_LABELS["COUT"], _from_bit_str(cout))
         except Exception:
             pass
-        mem.set(dst[i], _from_bit_str(s))
-        cin = cout
+        try:
+            s_led = int(mem.get(STEP_LABELS["SUM"]))
+        except Exception:
+            s_led = _from_bit_str(s)
+        mem.set(dst[i], s_led)
+        try:
+            cin = "0" if int(mem.get(STEP_LABELS["COUT"])) == 0 else "1"
+        except Exception:
+            cin = cout
     # 표시등 끄기 (있으면)
-    try:
-        mem.set(STEP_LABELS["CIN"], 0)
-        mem.set(STEP_LABELS["SUM"], 0)
-        mem.set(STEP_LABELS["COUT"], 0)
-    except Exception:
-        pass
+    return
 
 def sub8_via_lut(mem, *, src1: Sequence[str] = SRC1, src2: Sequence[str] = SRC2, dst: Sequence[str] = RES,
                  lsb_first: bool = True) -> None:
@@ -78,7 +84,12 @@ def sub8_via_lut(mem, *, src1: Sequence[str] = SRC1, src2: Sequence[str] = SRC2,
     LED 비트열 src1 - src2를 LUT로 계산해 dst에 기록.
     """
     idx_range = range(0, 8) if lsb_first else range(7, -1, -1)
-    bin_ = "0"
+    # Initialize borrow-in (Bin) via LED to 0
+    try:
+        mem.set(STEP_LABELS["CIN"], 0)
+        bin_ = "0" if int(mem.get(STEP_LABELS["CIN"])) == 0 else "1"
+    except Exception:
+        bin_ = "0"
     for i in idx_range:
         a = _to_bit_str(mem.get(src1[i]))
         b = _to_bit_str(mem.get(src2[i]))
@@ -89,14 +100,18 @@ def sub8_via_lut(mem, *, src1: Sequence[str] = SRC1, src2: Sequence[str] = SRC2,
             mem.set(STEP_LABELS["COUT"], _from_bit_str(bout))
         except Exception:
             pass
-        mem.set(dst[i], _from_bit_str(d))
-        bin_ = bout
-    try:
-        mem.set(STEP_LABELS["CIN"], 0)
-        mem.set(STEP_LABELS["SUM"], 0)
-        mem.set(STEP_LABELS["COUT"], 0)
-    except Exception:
-        pass
+        # Commit result via SUM LED
+        try:
+            d_led = int(mem.get(STEP_LABELS["SUM"]))
+        except Exception:
+            d_led = _from_bit_str(d)
+        mem.set(dst[i], d_led)
+        # Propagate borrow strictly through LED
+        try:
+            bin_ = "0" if int(mem.get(STEP_LABELS["COUT"])) == 0 else "1"
+        except Exception:
+            bin_ = bout
+    # Preserve STEP_LABELS final state (no auto-clear)
 
 def and8_via_lut(mem, *, src1: Sequence[str] = SRC1, src2: Sequence[str] = SRC2, dst: Sequence[str] = RES,
                  lsb_first: bool = True) -> None:

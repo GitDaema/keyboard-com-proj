@@ -5,6 +5,7 @@
 CPU가 LED 비트(SRC1/SRC2/RES) + LUT(bit_lut.py)로 실제 키보드 불빛만을 이용해 계산합니다.
 
 기본 개념
+- 단항 부정 최적화: `x = 0 - x` → `NEG x` (어셈블러가 자동 변환)
 - 값 범위: 서명 8비트(-128..127), 내부 저장과 연산은 2의 보수 기반.
 - 플래그: Z(Zero), N(Negative), V(Overflow). 비교/분기와 산술 연산에 사용.
 - 변수(허용 이름): utils/keyboard_presets.py의 VARIABLE_KEYS에 한정

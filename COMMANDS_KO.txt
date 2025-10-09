@@ -1,7 +1,7 @@
 인터랙티브 제어 명령 안내 (키보드 불빛 연동)
 
 프롬프트 형식:
-[step] Enter=next | c/run=continue | p/pause=pause | h/halt=halt | ehalt | reset | reset hard | reset bus | s/step/instr | mi/micro | cont | trace on/off/mark | overlay alu/irpc/bus/service/none | q=quit >
+[step] Enter=next | c/run/r/continue=continue | p/pause=pause | h/halt=halt | ehalt | reset | reset hard | reset bus | s/step/instr | mi/micro | cont | trace on/off/mark | overlay alu/irpc/bus/service/none | speed fast | op [token|map|off|clear] | debug all|rgb|op on|off | q=quit >
 
 기본 개념
 - 콘솔에서 입력하는 명령은 ‘패널 스위치’를 직접 조작하는 것과 동일합니다.
@@ -162,4 +162,22 @@ reset 동작(적용됨)
      • 메모리/IO 핸드셰이크가 꼬인 경우, 시스템 전체 정지 없이 버스만 복구
 
 주의
+ 
+op 및 debug 명령
+13) op [토큰] / op map / op off|clear  (연산자 3x3 블록 표시)
+   - 목적: PrintScreen..PageDown 3x3 블록에 연산 기호를 직관적으로 표시합니다.
+   - 사용: op '+', op '==', op '<<', op 'mov' 등. 토큰은 대소문자 무관.
+   - 지원 예: +, -, *, /, %, ==, !=, <, <=, >, >=, &, |, ^, ~, shl(<<), shr(>>), rol, ror, mov, nop 등.
+   - op map: 블록 위치와 키보드 라벨 매핑을 덤프합니다.
+   - op off|clear 또는 인자 없이: 표시 지움(nop).
+
+14) debug all|rgb|op on|off  (디버그 토글)
+   - rgb: RGB 원자적 업데이트 페이로드를 로그로 출력합니다.
+   - op: 3x3 연산자 블록 페이로드/적용 여부를 로그로 출력합니다.
+   - all: 위 두 가지를 동시에 토글합니다.
+   - 예) debug all on, debug rgb off
+
+추가 팁
+- 'step' 2단어 형태 지원: 'step instr', 'step micro', 'step cont'.
+- 'continue'와 'r' 별칭 지원: c/run/r/continue 모두 동일.
 - 본 reset/reset hard/reset bus 기능은 현재 코드에 구현되어 있습니다.

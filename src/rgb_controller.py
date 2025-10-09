@@ -14,11 +14,30 @@ km: Optional[RGBLabelController] = None
 
 # Runtime debug toggle for atomic updates (default: False)
 _ATOMIC_DEBUG: bool = False
+# Global apply delay (ms) used after batch/per-key LED updates to allow hardware to settle
+# Default 20ms is conservative; can be tuned at runtime via set_apply_delay_ms()
+_APPLY_DELAY_MS: int = 20
 
 def set_atomic_debug(on: bool) -> None:
     """Enable/disable verbose logs inside set_labels_atomic without env vars."""
     global _ATOMIC_DEBUG
     _ATOMIC_DEBUG = bool(on)
+
+def set_apply_delay_ms(ms: int) -> None:
+    """Set per-apply settle delay (in milliseconds) for LED updates.
+    Clamped to a safe range to preserve stability.
+    """
+    global _APPLY_DELAY_MS
+    try:
+        m = int(ms)
+    except Exception:
+        return
+    # Keep within a safe window (5ms..40ms)
+    if m < 5:
+        m = 5
+    if m > 40:
+        m = 40
+    _APPLY_DELAY_MS = m
 
 # --- 내부 유틸 ---
 
@@ -171,7 +190,10 @@ def init_all_keys(debug: bool = False) -> bool:
         time.sleep(0.05)
         # Redundant second pass helps on first run after cold boot
         device.set_colors(colors)
-        time.sleep(0.02)
+        try:
+            time.sleep(max(0.0, float(_APPLY_DELAY_MS) / 1000.0))
+        except Exception:
+            pass
         if debug:
             try:
                 print(f"[INFO] Cleared {len(colors)} LEDs to black (atomic)")
@@ -206,7 +228,10 @@ def set_key_color(label: str, color: RGBColor, debug: bool = False) -> bool:
 
     prev = get_key_color(label, fresh=True)[0] if debug else None
     ok = km.set(label, color)
-    time.sleep(0.02)  # 하드웨어 안정화 대기
+    try:
+        time.sleep(max(0.0, float(_APPLY_DELAY_MS) / 1000.0))
+    except Exception:
+        pass
 
     if ok and debug:
         after = (color.red, color.green, color.blue)
@@ -314,7 +339,10 @@ def set_labels_atomic(label_to_color: Dict[str, RGBColor]) -> bool:
                         pass
 
         if ok or ok_any:
-            time.sleep(0.02)
+            try:
+                time.sleep(max(0.0, float(_APPLY_DELAY_MS) / 1000.0))
+            except Exception:
+                pass
             if dbg:
                 try:
                     mode = "batch" if ok else "per-key"
@@ -341,7 +369,7 @@ def set_labels_atomic(label_to_color: Dict[str, RGBColor]) -> bool:
                         pass
         if applied:
             try:
-                time.sleep(0.02)
+                time.sleep(max(0.0, float(_APPLY_DELAY_MS) / 1000.0))
             except Exception:
                 pass
             return True

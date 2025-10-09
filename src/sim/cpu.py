@@ -36,7 +36,7 @@ from utils.bit_lut import (
     add8_via_lut, sub8_via_lut, and8_via_lut, or8_via_lut, xor8_via_lut,
     shl8_via_lut, shr8_via_lut
 )
-from utils.keyboard_presets import SRC1, SRC2, RES
+from utils.keyboard_presets import SRC1, SRC2, RES, STEP_LABELS
 from utils.keyboard_presets import VARIABLE_KEYS, BUS_ADDR_VALID, BUS_RD, BUS_WR, BUS_ACK
 from utils.operator_indicator import display_operator, set_op_block_debug
 
@@ -606,7 +606,10 @@ class CPU:
                 self.mem.set(dst, v)
                 inputs_same_sign = _sign_bit(a) == _sign_bit(b)
                 self.flags["V"] = 1 if inputs_same_sign and (_sign_bit(a) != _sign_bit(v)) else 0
-                self.flags["C"] = 1 if (_to_u8(a) + _to_u8(b)) > 0xFF else 0
+                try:
+                    self.flags["C"] = 1 if int(self.mem.get(STEP_LABELS["COUT"])) != 0 else 0
+                except Exception:
+                    self.flags["C"] = 1 if (_to_u8(a) + _to_u8(b)) > 0xFF else 0
                 _set_zn_from_val(self.flags, v)
                 self._on_execute(f"ADDI {dst}, #{b}")
                 ch = {dst: v}
@@ -617,7 +620,10 @@ class CPU:
                 self.mem.set(dst, v)
                 inputs_same_sign = _sign_bit(a) == _sign_bit(b)
                 self.flags["V"] = 1 if inputs_same_sign and (_sign_bit(a) != _sign_bit(v)) else 0
-                self.flags["C"] = 1 if (_to_u8(a) + _to_u8(b)) > 0xFF else 0
+                try:
+                    self.flags["C"] = 1 if int(self.mem.get(STEP_LABELS["COUT"])) != 0 else 0
+                except Exception:
+                    self.flags["C"] = 1 if (_to_u8(a) + _to_u8(b)) > 0xFF else 0
                 _set_zn_from_val(self.flags, v)
                 self._on_execute(f"ADD {dst}, {src}")
                 ch = {dst: v}
@@ -628,7 +634,11 @@ class CPU:
                 self.mem.set(dst, v)
                 inputs_diff_sign = _sign_bit(a) != _sign_bit(b)
                 self.flags["V"] = 1 if inputs_diff_sign and (_sign_bit(a) != _sign_bit(v)) else 0
-                self.flags["C"] = 1 if _to_u8(a) >= _to_u8(b) else 0
+                try:
+                    bout = int(self.mem.get(STEP_LABELS["COUT"]))
+                    self.flags["C"] = 1 if bout == 0 else 0
+                except Exception:
+                    self.flags["C"] = 1 if _to_u8(a) >= _to_u8(b) else 0
                 _set_zn_from_val(self.flags, v)
                 self._on_execute(f"SUBI {dst}, #{b}")
                 ch = {dst: v}
@@ -639,7 +649,11 @@ class CPU:
                 self.mem.set(dst, v)
                 inputs_diff_sign = _sign_bit(a) != _sign_bit(b)
                 self.flags["V"] = 1 if inputs_diff_sign and (_sign_bit(a) != _sign_bit(v)) else 0
-                self.flags["C"] = 1 if _to_u8(a) >= _to_u8(b) else 0
+                try:
+                    bout = int(self.mem.get(STEP_LABELS["COUT"]))
+                    self.flags["C"] = 1 if bout == 0 else 0
+                except Exception:
+                    self.flags["C"] = 1 if _to_u8(a) >= _to_u8(b) else 0
                 _set_zn_from_val(self.flags, v)
                 self._on_execute(f"SUB {dst}, {src}")
                 ch = {dst: v}
@@ -660,7 +674,11 @@ class CPU:
                 v = res_u8 if res_u8 < 128 else res_u8 - 256
                 inputs_diff_sign = _sign_bit(a) != _sign_bit(b)
                 self.flags["V"] = 1 if inputs_diff_sign and (_sign_bit(a) != _sign_bit(v)) else 0
-                self.flags["C"] = 1 if _to_u8(a) >= _to_u8(b) else 0
+                try:
+                    bout = int(self.mem.get(STEP_LABELS["COUT"]))
+                    self.flags["C"] = 1 if bout == 0 else 0
+                except Exception:
+                    self.flags["C"] = 1 if _to_u8(a) >= _to_u8(b) else 0
                 _set_zn_from_val(self.flags, v)
                 self._on_execute(f"CMP {dst}, {src}")
             elif op4 == OPCODES["CMP"] and is_cmpi:
@@ -669,7 +687,11 @@ class CPU:
                 v = res_u8 if res_u8 < 128 else res_u8 - 256
                 inputs_diff_sign = _sign_bit(a) != _sign_bit(b)
                 self.flags["V"] = 1 if inputs_diff_sign and (_sign_bit(a) != _sign_bit(v)) else 0
-                self.flags["C"] = 1 if _to_u8(a) >= _to_u8(b) else 0
+                try:
+                    bout = int(self.mem.get(STEP_LABELS["COUT"]))
+                    self.flags["C"] = 1 if bout == 0 else 0
+                except Exception:
+                    self.flags["C"] = 1 if _to_u8(a) >= _to_u8(b) else 0
                 _set_zn_from_val(self.flags, v)
                 self._on_execute(f"CMPI {dst}, #{b}")
             elif op4 == OPCODES["SHIFT"]:
@@ -706,7 +728,11 @@ class CPU:
                 # Flags like SUB with a=0, b=a
                 inputs_diff_sign = _sign_bit(0) != _sign_bit(a)
                 self.flags["V"] = 1 if inputs_diff_sign and (_sign_bit(0) != _sign_bit(v)) else 0
-                self.flags["C"] = 1 if _to_u8(0) >= _to_u8(a) else 0
+                try:
+                    bout = int(self.mem.get(STEP_LABELS["COUT"]))
+                    self.flags["C"] = 1 if bout == 0 else 0
+                except Exception:
+                    self.flags["C"] = 1 if _to_u8(0) >= _to_u8(a) else 0
                 _set_zn_from_val(self.flags, v)
                 self._on_execute(f"NEG {dst}")
                 ch = {dst: v}
@@ -1580,6 +1606,26 @@ class CPU:
             except Exception:
                 pass
             return
+        if s.startswith("speed"):
+            # Usage: speed fast
+            # Provide a single faster-but-stable preset focusing on LED I/O stability
+            try:
+                parts = [p for p in s.split(" ") if p]
+                mode = parts[1] if len(parts) > 1 else ""
+            except Exception:
+                mode = ""
+            if mode in ("fast", "quick", "safe-fast"):
+                try:
+                    self._apply_speed_preset("FAST_SAFE")
+                except Exception:
+                    pass
+                return
+            # Fallback help
+            try:
+                self._println("[SPEED] usage: speed fast   (apply faster-but-stable preset)")
+            except Exception:
+                pass
+            return
         if s in ("c", "run", "r", "continue"):
             # Continuous run request
             self._continue_run = True
@@ -1777,6 +1823,66 @@ class CPU:
         except Exception:
             pass
 
+    def _apply_speed_preset(self, preset: str) -> None:
+        """Apply runtime speed/stability parameters for LED I/O based simulation.
+        Presets intentionally keep stability first. Currently supports one preset:
+          - FAST_SAFE: noticeably faster while preserving robust LED reads/writes
+        """
+        name = str(preset).upper()
+        # Resolve BusInterface (when memory is BusMemory wrapper)
+        try:
+            bus = getattr(self.mem, "_bus", None)
+        except Exception:
+            bus = None
+        # Resolve visual memory core (DataMemoryRGBVisual) if wrapped
+        try:
+            mem_core = getattr(self.mem, "_inner", None)
+            if mem_core is None:
+                mem_core = self.mem
+        except Exception:
+            mem_core = self.mem
+
+        if name == "FAST_SAFE":
+            # Bus: keep internal ACK and reduce pulse/settle to safe-but-faster values
+            try:
+                if bus is not None:
+                    bus.ack_mode = "internal"
+                    bus.ack_pulse_ms = max(8, min(12, int(getattr(bus, "ack_pulse_ms", 10))))
+                    # Aim ~10ms pulse; clamp into [8,12]
+                    bus.ack_pulse_ms = 10
+                    # Reduce settle while keeping margin for device update
+                    bus.settle_ms = 5
+                    # Keep a generous timeout to avoid spurious faults
+                    bus.ack_timeout_ms = max(200, int(getattr(bus, "ack_timeout_ms", 200)))
+            except Exception:
+                pass
+            # DataMemory sampling: keep 3 samples, zero inter-sample delay for speed
+            try:
+                if hasattr(mem_core, "_samples"):
+                    setattr(mem_core, "_samples", 3)
+                if hasattr(mem_core, "_delay"):
+                    setattr(mem_core, "_delay", 0)
+            except Exception:
+                pass
+            # Reduce per-apply settle used by RGB controller (batch/per-key)
+            try:
+                from rgb_controller import set_apply_delay_ms
+                set_apply_delay_ms(8)
+            except Exception:
+                pass
+            # User-facing summary
+            try:
+                msg = "[SPEED] applied FAST_SAFE preset (samples=3, delay=0ms, ack_pulse=10ms, settle=5ms)"
+                self._println(msg)
+            except Exception:
+                pass
+            return
+        # Unknown preset
+        try:
+            self._println(f"[SPEED] unknown preset: {preset}")
+        except Exception:
+            pass
+
     def _exec_one(self, op: str, args: tuple[Any, ...]) -> Dict[str, int]:
         ch: Dict[str, int] = {}
 
@@ -1893,8 +1999,11 @@ class CPU:
 
             inputs_same_sign = _sign_bit(a) == _sign_bit(b)
             self.flags["V"] = 1 if inputs_same_sign and (_sign_bit(a) != _sign_bit(v)) else 0
-            # Carry: unsigned carry out
-            self.flags["C"] = 1 if (_to_u8(a) + _to_u8(b)) > 0xFF else 0
+            # Carry: derive from final COUT LED (fallback to numeric)
+            try:
+                self.flags["C"] = 1 if int(self.mem.get(STEP_LABELS["COUT"])) != 0 else 0
+            except Exception:
+                self.flags["C"] = 1 if (_to_u8(a) + _to_u8(b)) > 0xFF else 0
             _set_zn_from_val(self.flags, v)
             self._on_execute(
                 f"ADDI {dst}, #{imm} ; via LUT {dst_name}:{a}+{b}->{v} | Z={self.flags['Z']} N={self.flags['N']} V={self.flags['V']}"
@@ -1919,8 +2028,11 @@ class CPU:
 
             inputs_same_sign = _sign_bit(a) == _sign_bit(b)
             self.flags["V"] = 1 if inputs_same_sign and (_sign_bit(a) != _sign_bit(v)) else 0
-            # Carry: unsigned carry out
-            self.flags["C"] = 1 if (_to_u8(a) + _to_u8(b)) > 0xFF else 0
+            # Carry: derive from final COUT LED (fallback to numeric)
+            try:
+                self.flags["C"] = 1 if int(self.mem.get(STEP_LABELS["COUT"])) != 0 else 0
+            except Exception:
+                self.flags["C"] = 1 if (_to_u8(a) + _to_u8(b)) > 0xFF else 0
             _set_zn_from_val(self.flags, v)
             self._on_execute(
                 f"ADD  {dst}, {src} ; via LUT {dst_name}:{a}+{b}->{v} | Z={self.flags['Z']} N={self.flags['N']} V={self.flags['V']}"
@@ -1938,8 +2050,11 @@ class CPU:
             # Signed overflow: inputs same sign and result sign differs from a
             inputs_same_sign = (1 if (a_u8 & 0x80) else 0) == (1 if (b_u8 & 0x80) else 0)
             self.flags["V"] = 1 if inputs_same_sign and ((1 if (a_u8 & 0x80) else 0) != (1 if (res_u8 & 0x80) else 0)) else 0
-            # Unsigned carry out
-            self.flags["C"] = 1 if (a_u8 + b_u8) > 0xFF else 0
+            # Unsigned carry out from final COUT LED
+            try:
+                self.flags["C"] = 1 if int(self.mem.get(STEP_LABELS["COUT"])) != 0 else 0
+            except Exception:
+                self.flags["C"] = 1 if (a_u8 + b_u8) > 0xFF else 0
             _set_zn_from_val(self.flags, v)
             self._on_execute("ADD8 (via LUT) ; RES -> SRC1 + SRC2")
             return ch
@@ -1961,8 +2076,12 @@ class CPU:
 
             inputs_diff_sign = _sign_bit(a) != _sign_bit(b)
             self.flags["V"] = 1 if inputs_diff_sign and (_sign_bit(a) != _sign_bit(v)) else 0
-            # Carry as 'no borrow' for subtraction
-            self.flags["C"] = 1 if _to_u8(a) >= _to_u8(b) else 0
+            # Carry as 'no borrow' for subtraction (from final COUT LED)
+            try:
+                bout = int(self.mem.get(STEP_LABELS["COUT"]))
+                self.flags["C"] = 1 if bout == 0 else 0
+            except Exception:
+                self.flags["C"] = 1 if _to_u8(a) >= _to_u8(b) else 0
             _set_zn_from_val(self.flags, v)
             self._on_execute(f"SUBI {dst}, #{imm} ; via LUT {dst_name}:{a}-{b}->{v} | Z={self.flags['Z']} N={self.flags['N']} V={self.flags['V']}")
             ch[dst_name] = v
@@ -1985,8 +2104,12 @@ class CPU:
 
             inputs_diff_sign = _sign_bit(a) != _sign_bit(b)
             self.flags["V"] = 1 if inputs_diff_sign and (_sign_bit(a) != _sign_bit(v)) else 0
-            # Carry as 'no borrow' for subtraction
-            self.flags["C"] = 1 if _to_u8(a) >= _to_u8(b) else 0
+            # Carry as 'no borrow' for subtraction (from final COUT LED)
+            try:
+                bout = int(self.mem.get(STEP_LABELS["COUT"]))
+                self.flags["C"] = 1 if bout == 0 else 0
+            except Exception:
+                self.flags["C"] = 1 if _to_u8(a) >= _to_u8(b) else 0
             _set_zn_from_val(self.flags, v)
             self._on_execute(f"SUB  {dst}, {src} ; via LUT {dst_name}:{a}-{b}->{v} | Z={self.flags['Z']} N={self.flags['N']} V={self.flags['V']}")
             ch[dst_name] = v
@@ -2002,8 +2125,12 @@ class CPU:
             # Signed overflow on subtraction: inputs different sign and result sign differs from a
             inputs_diff_sign = ((a_u8 ^ b_u8) & 0x80) != 0
             self.flags["V"] = 1 if inputs_diff_sign and (((a_u8 ^ res_u8) & 0x80) != 0) else 0
-            # Carry as 'no borrow'
-            self.flags["C"] = 1 if a_u8 >= b_u8 else 0
+            # Carry as 'no borrow' (from final COUT LED)
+            try:
+                bout = int(self.mem.get(STEP_LABELS["COUT"]))
+                self.flags["C"] = 1 if bout == 0 else 0
+            except Exception:
+                self.flags["C"] = 1 if a_u8 >= b_u8 else 0
             _set_zn_from_val(self.flags, v)
             self._on_execute("SUB8 (via LUT) ; RES -> SRC1 - SRC2")
             return ch
@@ -2101,8 +2228,12 @@ class CPU:
 
             inputs_diff_sign = _sign_bit(a) != _sign_bit(b)
             self.flags["V"] = 1 if inputs_diff_sign and (_sign_bit(a) != _sign_bit(v)) else 0
-            # Carry as 'no borrow' like SUB
-            self.flags["C"] = 1 if _to_u8(a) >= _to_u8(b) else 0
+            # Carry as 'no borrow' like SUB (from final COUT LED)
+            try:
+                bout = int(self.mem.get(STEP_LABELS["COUT"]))
+                self.flags["C"] = 1 if bout == 0 else 0
+            except Exception:
+                self.flags["C"] = 1 if _to_u8(a) >= _to_u8(b) else 0
             _set_zn_from_val(self.flags, v)
             
             b_str = f"#{b}" if op == "CMPI" else str(b_arg)
