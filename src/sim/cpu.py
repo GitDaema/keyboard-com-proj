@@ -535,6 +535,32 @@ class CPU:
             labels = self._group_labels(grp)
             u8 &= 0xFF
             width = len(labels)
+            # Fast path: for RES only, batch-commit to visually latch bits together
+            try:
+                from rgb_controller import is_group_atomic, set_labels_atomic
+                from openrgb.utils import RGBColor
+                if is_group_atomic() and str(grp).upper() == "RES":
+                    payload: Dict[str, RGBColor] = {}
+                    bits_map: Dict[str, int] = {}
+                    for i in range(width):
+                        bit = (u8 >> i) & 1
+                        lab = labels[width - 1 - i]
+                        on_rgb, off_rgb = BINARY_COLORS.get(lab, ((255, 255, 255), (0, 0, 0)))
+                        rgb = on_rgb if bit else off_rgb
+                        payload[lab] = RGBColor(*rgb)
+                        bits_map[lab] = int(bit)
+                    ok = set_labels_atomic(payload)
+                    if not ok:
+                        # Fallback per-bit via memory wrapper
+                        for lab, bit in bits_map.items():
+                            try:
+                                self.mem.set(lab, bit)
+                            except Exception:
+                                pass
+                    return
+            except Exception:
+                pass
+            # Default: sequential per-bit writes
             for i in range(width):
                 bit = (u8 >> i) & 1
                 lab = labels[width - 1 - i]
@@ -1614,7 +1640,7 @@ class CPU:
                 mode = parts[1] if len(parts) > 1 else ""
             except Exception:
                 mode = ""
-            if mode in ("fast", "quick", "safe-fast"):
+            if mode in ("fast",):
                 try:
                     self._apply_speed_preset("FAST_SAFE")
                 except Exception:
@@ -1866,8 +1892,10 @@ class CPU:
                 pass
             # Reduce per-apply settle used by RGB controller (batch/per-key)
             try:
-                from rgb_controller import set_apply_delay_ms
+                from rgb_controller import set_apply_delay_ms, set_group_atomic
                 set_apply_delay_ms(8)
+                # Enable group-atomic register updates for SRC1/SRC2/RES
+                set_group_atomic(True)
             except Exception:
                 pass
             # User-facing summary

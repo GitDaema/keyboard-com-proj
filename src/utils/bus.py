@@ -78,14 +78,14 @@ class BusInterface:
             payload[lab] = RGBColor(*rgb)
         ok = set_labels_atomic(payload)
         if not ok:
-            # fallback per-key
+            # Fallback per-key (these calls include their own settle delay)
             for lab, col in payload.items():
                 try:
                     set_key_color(lab, col)
                 except Exception:
                     pass
-        if self.settle_ms > 0:
-            time.sleep(self.settle_ms / 1000.0)
+        # Note: set_labels_atomic/set_key_color already include an apply delay;
+        # avoid double-sleep here to reduce cycle latency safely.
 
     def _ack_on(self) -> None:
         on_rgb, _ = _on_off(BUS_ACK)

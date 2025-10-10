@@ -78,13 +78,32 @@ class DataMemoryRGBVisual:
             time.sleep(self._delay / 1000.0)
 
     def _read_rgb_multi(self, name: str) -> tuple[int, int, int]:
+        """Read RGB multiple times with optional early exit if stable.
+        - Refresh device once, then reuse cached state for subsequent samples in the window.
+        - If the first two samples are very close, skip remaining samples to save time.
+        """
         rs = gs = bs = 0
         n = max(1, self._samples)
-        for _ in range(n):
-            r, g, b = get_key_color(name, fresh=True)[0]
+        prev: tuple[int, int, int] | None = None
+        fresh = True
+        taken = 0
+        for i in range(n):
+            r, g, b = get_key_color(name, fresh=fresh)[0]
+            fresh = False  # avoid repeated full-device refreshes within the same read window
             rs += int(r); gs += int(g); bs += int(b)
+            taken += 1
+            # Early-exit: if two consecutive samples are nearly identical, stop
+            if prev is not None:
+                dr = abs(int(r) - prev[0])
+                dg = abs(int(g) - prev[1])
+                db = abs(int(b) - prev[2])
+                if dr <= 3 and dg <= 3 and db <= 3:
+                    break
+            prev = (int(r), int(g), int(b))
             self._sleep()
-        return (rs // n, gs // n, bs // n)
+        if taken <= 0:
+            return (0, 0, 0)
+        return (rs // taken, gs // taken, bs // taken)
 
     def get(self, name: str) -> int:
         if name in self._binary:
@@ -96,12 +115,17 @@ class DataMemoryRGBVisual:
             votes_on = 0
             votes_off = 0
             n = max(1, self._samples)
-            for _ in range(n):
-                r, g, b = get_key_color(name, fresh=True)[0]
+            fresh = True
+            for i in range(n):
+                r, g, b = get_key_color(name, fresh=fresh)[0]
+                fresh = False  # refresh once at the start
                 if d2((r,g,b), on_rgb) <= d2((r,g,b), off_rgb):
                     votes_on += 1
                 else:
                     votes_off += 1
+                # Early exit: if first two samples already agree, skip third
+                if n >= 3 and i == 1 and (votes_on == 2 or votes_off == 2):
+                    break
                 self._sleep()
             bit = 1 if votes_on >= votes_off else 0
             if self._debug:

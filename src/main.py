@@ -15,7 +15,23 @@ OpenRGB 서버(127.0.0.1:6742)에 연결하여 키보드 LED를 초기화하고,
 
 import time
 import os
-from rgb_controller import connect, disconnect, set_key_color, get_key_color, init_all_keys
+import sys
+
+# Prefer local rgb_controller; fall back to project-root dump_rgb_controller if needed
+try:
+    import rgb_controller as rc  # from src/
+    if not hasattr(rc, "connect"):
+        raise AttributeError("rgb_controller.connect missing")
+except Exception:
+    try:
+        ROOT = os.path.dirname(os.path.dirname(__file__))
+        if ROOT not in sys.path:
+            sys.path.insert(0, ROOT)
+        import importlib
+        rc = importlib.import_module('dump_rgb_controller')  # fallback copy
+    except Exception as _ex:
+        # Defer error until main() runs to show a clearer message
+        rc = None  # type: ignore
 from utils.bitgroups import set_group_value, get_group_value, copy_group_value
 import utils.keyboard_presets as kp
 import utils.color_presets as cp
@@ -30,7 +46,7 @@ from sim.assembler import assemble_program
 def rgb_routine(label: str):
     for c in cp.HEX_COLORS.values():
         time.sleep(0.6)
-        set_key_color(label, c, debug=True)
+        rc.set_key_color(label, c, debug=True)
         input()
 
 def bitgroup_test(n: int):
@@ -42,9 +58,11 @@ def bitgroup_test(n: int):
 
 def main():
     try:
-        connect()
+        if rc is None:
+            raise RuntimeError("rgb_controller 모듈을 불러오지 못했습니다")
+        rc.connect()
         time.sleep(0.6)
-        init_all_keys()
+        rc.init_all_keys()
         # 시작 대기 동안 PAUSE 표시
         try:
             run_off()
@@ -54,8 +72,9 @@ def main():
             init_default_panel()
         except Exception:
             pass
-        print("[INFO] All keys ready. Press Enter to start.")
-        input()
+        # [TEMP] Auto-benchmark mode enabled by default (no prompt)
+        # print("[INFO] All keys ready. Press Enter to start.")
+        # input()
 
         # LED 메모리 I/O 샘플 설정(지연 0~5ms 권장)
         mem_core = DataMemoryRGBVisual(binary_labels=kp.BINARY_COLORS, samples=3, sample_delay_ms=0, debug=False)
@@ -89,9 +108,9 @@ def main():
             "s = 0",           # 임시/플래그 용도
 
             # SHIFT 테스트: s <- a; SHL/SHR 실행(ISA: SHIFT)
-            # "s = a",
-            # "SHL s",
-            # "SHR s",
+            "s = a",
+            "SHL s",
+            "SHR s",
 
             # a < 0 이면 a = -a (절대값 만들기)
             "IF a < #0 THEN",
@@ -135,6 +154,55 @@ def main():
 
         # 실행
         cpu.load_program(program, debug=True)
+
+        # --- BENCH: type 'bench fast' or 'bench normal' then Enter to measure ---
+        bench = False
+        bench_fast = False
+        try:
+            print("[BENCH] 입력: 'bench fast' | 'bench normal' | Enter=skip > ", end="", flush=True)
+            sel = input().strip().lower()
+            if sel.startswith("bench"):
+                bench = True
+                bench_fast = ("fast" in sel)
+        except Exception:
+            bench = False
+            bench_fast = False
+        if bench:
+            try:
+                if bench_fast:
+                    # Apply FAST (single high-speed preset) with visual group-atomic commits
+                    cpu._apply_speed_preset("FAST_SAFE")
+                    print("[BENCH] preset=FAST (FAST_SAFE)")
+                else:
+                    # Ensure fast-specific toggles are off
+                    try:
+                        from rgb_controller import set_group_atomic
+                        set_group_atomic(False)
+                    except Exception:
+                        pass
+                    print("[BENCH] preset=NORMAL")
+            except Exception:
+                pass
+            try:
+                cpu.cp_enabled = True
+                cpu._cmd_q.put("run")  # continuous run
+            except Exception:
+                pass
+            t0 = time.perf_counter()
+            cpu.run_led()
+            t1 = time.perf_counter()
+            elapsed_s = max(0.0, float(t1 - t0))
+            total_ms = elapsed_s * 1000.0
+            try:
+                insns = len(getattr(cpu, "_isa", []) or [])
+            except Exception:
+                insns = 0
+            if insns > 0 and elapsed_s > 0:
+                ips = insns / elapsed_s
+                print(f"[BENCH] insns={insns} total_ms={total_ms:.1f} ips={ips:.1f}")
+            else:
+                print(f"[BENCH] total_ms={total_ms:.1f}")
+            return
 
         # --- DEMO: Force bus ACK failure to verify FAULT latch ---
         do_demo = False
@@ -210,8 +278,24 @@ def main():
             pass
         
     finally:
-        init_all_keys()
-        disconnect()
+        try:
+            if rc is not None:
+                try:
+                    # Best-effort: clear all keys only when connected
+                    if getattr(rc, 'is_connected', None) and rc.is_connected():
+                        rc.init_all_keys()
+                except Exception:
+                    # Last-ditch: still try to clear without check
+                    try:
+                        rc.init_all_keys()
+                    except Exception:
+                        pass
+                try:
+                    rc.disconnect()
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     main()

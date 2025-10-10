@@ -90,8 +90,10 @@ def get_group_value(
     bits_lsb: List[int] = []
     on_labels: List[str] = []
 
-    for lab in order:
-        (r, g, b) = get_key_color(lab, fresh=fresh)[0]  # (R,G,B)
+    for idx, lab in enumerate(order):
+        # Refresh device at most once per group read to reduce overhead
+        do_fresh = bool(fresh) and (idx == 0)
+        (r, g, b) = get_key_color(lab, fresh=do_fresh)[0]  # (R,G,B)
         on = ((r + g + b) / 3.0) >= threshold
         bit = 1 if on else 0
         bits_lsb.append(bit)
