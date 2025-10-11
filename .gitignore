@@ -54,6 +54,7 @@ bin/*
 !bin/windows/**
 build/
 dist/
+package/
 *.dll
 *.exe
 *.so
@@ -62,6 +63,12 @@ dist/
 *.o
 *.a
 *.lib
+
+# Local build virtualenv (created by build script)
+.build_venv/
+
+# PyInstaller spec files
+*.spec
 
 # ------------------------
 # Temporary / Others
