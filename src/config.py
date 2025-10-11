@@ -27,5 +27,36 @@ def _resolve_project_root() -> Path:
 
 PROJECT_ROOT = _resolve_project_root()
 
-DATA_DIR = PROJECT_ROOT / "data"
+def _resolve_data_dir(project_root: Path) -> Path:
+    """Best-effort resolution of packaged data directory.
+    Tries these locations in order:
+      1) <project_root>/data
+      2) sys._MEIPASS/data (PyInstaller onefile)
+      3) <project_root>/_internal/data (some onedir layouts)
+      4) repo source fallback: <this_file>/../../data
+    Returns the first existing path; falls back to project_root/data.
+    """
+    candidates = []
+    candidates.append(project_root / "data")
+    try:
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            candidates.append(Path(meipass) / "data")
+    except Exception:
+        pass
+    candidates.append(project_root / "_internal" / "data")
+    try:
+        repo_fallback = Path(__file__).resolve().parents[1] / "data"
+        candidates.append(repo_fallback)
+    except Exception:
+        pass
+    for p in candidates:
+        try:
+            if p.exists() and (p / "maps").exists():
+                return p
+        except Exception:
+            pass
+    return candidates[0]
+
+DATA_DIR = _resolve_data_dir(PROJECT_ROOT)
 MAPS_DIR = DATA_DIR / "maps"

@@ -8,7 +8,9 @@ param(
   [string]$OpenRGBZip = "",
   # Optional: local path to a folder that contains OpenRGB.exe
   [string]$OpenRGBDir = "",
-  [switch]$WithChecksums
+  [switch]$WithChecksums,
+  # Exclude kernel driver files from packaged OpenRGB to avoid archive issues
+  [switch]$ExcludeDrivers
 )
 
 Set-StrictMode -Version Latest
@@ -73,7 +75,7 @@ Invoke-Py $bpy @('-m','pip','install','-r','requirements.txt')
 Write-Host "[STEP] PyInstaller build ($Name)"
 New-EmptyDir 'build'
 New-EmptyDir 'dist'
-Invoke-Py $bpy @('-m','PyInstaller', '--noconfirm','--clean', '--name', $Name, '--paths','src', '--add-data','data;data', $Entry)
+Invoke-Py $bpy @('-m','PyInstaller', '--noconfirm','--clean', '--name', $Name, '--paths','src', '--hidden-import','rgb_controller', '--add-data','data;data', $Entry)
 
 $distDir = Join-Path (Get-Location) "dist/$Name"
 $exePath = Join-Path $distDir "$Name.exe"
@@ -83,6 +85,12 @@ Write-Host "[STEP] Assemble package"
 $pkgRoot = Join-Path (Get-Location) "package/$Name"
 New-EmptyDir $pkgRoot
 Copy-Item -Recurse -Force "$distDir/*" $pkgRoot
+# Ensure data directory exists at package root for config path resolution
+if (Test-Path 'data') {
+  Write-Host "[STEP] Copy data/ into package root"
+  New-Item -ItemType Directory -Force -Path (Join-Path $pkgRoot 'data') | Out-Null
+  Copy-Item -Recurse -Force 'data/*' (Join-Path $pkgRoot 'data')
+}
 
 if ($OpenRGBZip -and (Test-Path $OpenRGBZip)) {
   Write-Host "[STEP] Bundling OpenRGB from zip: $OpenRGBZip"
@@ -104,19 +112,32 @@ if ($OpenRGBZip -and (Test-Path $OpenRGBZip)) {
   Copy-Item -Recurse -Force $OpenRGBDir (Join-Path $pkgRoot 'OpenRGB')
 }
 
+# Optionally remove kernel driver files (often not required for keyboard control)
+if ($ExcludeDrivers) {
+  try {
+    $drv = Get-ChildItem -Path (Join-Path $pkgRoot 'OpenRGB') -Recurse -Include *.sys -ErrorAction SilentlyContinue
+    if ($drv) {
+      Write-Host "[STEP] Excluding driver files from package (*.sys)"
+      $drv | Remove-Item -Force -ErrorAction SilentlyContinue
+    }
+  } catch { Write-Warning "Driver exclusion failed: $_" }
+}
+
 # Write run.ps1
 $runPs1 = @'
 param(
-  [switch]$NoKillOpenRGB
+  [switch]$NoKillOpenRGB,
+  [switch]$KeepOpen,
+  [switch]$Log
 )
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 function Test-PortOpen {
-  param([string]$Host, [int]$Port)
+  param([string]$TargetHost, [int]$Port)
   try {
     $client = New-Object System.Net.Sockets.TcpClient
-    $iar = $client.BeginConnect($Host, $Port, $null, $null)
+    $iar = $client.BeginConnect($TargetHost, $Port, $null, $null)
     $ok = $iar.AsyncWaitHandle.WaitOne(300)
     if ($ok -and $client.Connected) { $client.Close(); return $true }
     try { $client.Close() } catch {}
@@ -131,24 +152,58 @@ $openrgbExe = Join-Path $here 'OpenRGB/OpenRGB.exe'
 $started = $false
 $proc = $null
 if (Test-Path $openrgbExe) {
-  Write-Host "[INFO] Starting bundled OpenRGB server..."
-  $proc = Start-Process -FilePath $openrgbExe -ArgumentList '--server' -WindowStyle Minimized -PassThru
-  $started = $true
-  $deadline = (Get-Date).AddSeconds(10)
-  while ((Get-Date) -lt $deadline) {
-    if (Test-PortOpen -Host '127.0.0.1' -Port 6742) { break }
-    Start-Sleep -Milliseconds 200
+  if (Test-PortOpen -TargetHost '127.0.0.1' -Port 6742) {
+    Write-Host "[INFO] OpenRGB server already listening; skip starting."
+  } else {
+    Write-Host "[INFO] Starting bundled OpenRGB server..."
+    $proc = Start-Process -FilePath $openrgbExe -ArgumentList '--server' -WindowStyle Minimized -PassThru
+    $started = $true
+    $deadline = (Get-Date).AddSeconds(10)
+    while ((Get-Date) -lt $deadline) {
+      if (Test-PortOpen -TargetHost '127.0.0.1' -Port 6742) { break }
+      Start-Sleep -Milliseconds 200
+    }
   }
 }
 
 Write-Host "[INFO] Launching app"
 $exe = $env:APP_EXE
 if ([string]::IsNullOrWhiteSpace($exe)) { $exe = 'keyboard-com.exe' }
-& (Join-Path $here $exe)
-$exitCode = $LASTEXITCODE
+$exitCode = 0
+try {
+  $exePath = Join-Path $here $exe
+  if ($Log) {
+    $logFile = Join-Path $here 'run_log.txt'
+    # Non-interactive logging mode: redirect both stdout/stderr to file
+    $p = Start-Process -FilePath $exePath -WorkingDirectory $here -RedirectStandardOutput $logFile -RedirectStandardError $logFile -PassThru
+    $p.WaitForExit()
+    $exitCode = $p.ExitCode
+  } else {
+    # Interactive mode: no piping/redirects to preserve TTY behavior
+    & $exePath
+    $exitCode = $LASTEXITCODE
+  }
+} catch {
+  $exitCode = 1
+  $msg = "[ERROR] Failed to start app: $_"
+  Write-Host $msg -ForegroundColor Red
+  try { $msg | Out-File -FilePath (Join-Path $here 'run_log.txt') -Encoding UTF8 -Append } catch {}
+}
 
 if ($started -and -not $NoKillOpenRGB) {
   try { Stop-Process -Id $proc.Id -ErrorAction SilentlyContinue } catch {}
+}
+
+if ($KeepOpen -or ($exitCode -ne 0)) {
+  try {
+    Write-Host ""; Write-Host "[INFO] ExitCode=$exitCode" -ForegroundColor Yellow
+    $log = Join-Path $here 'run_log.txt'
+    if (Test-Path $log) {
+      Write-Host "[LOG] tail of run_log.txt:" -ForegroundColor Cyan
+      Get-Content -Tail 80 $log
+    }
+  } catch {}
+  Read-Host "종료하려면 Enter 키를 누르세요"
 }
 
 exit $exitCode
@@ -160,7 +215,7 @@ $runBat = @"
 @echo off
 setlocal enabledelayedexpansion
 set APP_EXE=keyboard-com.exe
-powershell -ExecutionPolicy Bypass -File "%~dp0run.ps1"
+powershell -ExecutionPolicy Bypass -File "%~dp0run.ps1" -KeepOpen
 "@
 Set-Content -Path (Join-Path $pkgRoot 'run.bat') -Encoding ASCII -Value $runBat
 
@@ -203,24 +258,33 @@ $zipName = "$Name-$Version-win64.zip"
 $zipPath = Join-Path (Get-Location) ("dist/" + $zipName)
 if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
 try {
-  $ok = $false
-  for ($i=1; $i -le 5; $i++) {
-    try {
-      Compress-Archive -Path (Join-Path $pkgRoot '*') -DestinationPath $zipPath -Force
-      $ok = $true; break
-    } catch {
-      Write-Warning "Compress-Archive failed (attempt $i): $_"
-      Start-Sleep -Milliseconds 900
-    }
-  }
-  if (-not $ok) { throw "Compress-Archive failed after retries" }
+  Write-Host "[STEP] Create zip via .NET ZipFile"
+  Add-Type -AssemblyName 'System.IO.Compression.FileSystem' -ErrorAction SilentlyContinue
+  if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
+  [System.IO.Compression.ZipFile]::CreateFromDirectory($pkgRoot, $zipPath, [System.IO.Compression.CompressionLevel]::Optimal, $false)
   Write-Host "[DONE] Package: $zipPath"
 } catch {
-  Write-Warning "Compress-Archive failed; trying tar fallback..."
-  $tar = Get-Command tar -ErrorAction SilentlyContinue
-  if (-not $tar) { throw }
-  & $tar.Source -a -c -f $zipPath -C $pkgRoot .
-  Write-Host "[DONE] Package (tar): $zipPath"
+  Write-Warning "ZipFile failed; trying Compress-Archive..."
+  try {
+    $ok = $false
+    for ($i=1; $i -le 3; $i++) {
+      try {
+        Compress-Archive -Path (Join-Path $pkgRoot '*') -DestinationPath $zipPath -Force
+        $ok = $true; break
+      } catch {
+        Write-Warning "Compress-Archive failed (attempt $i): $_"
+        Start-Sleep -Milliseconds 900
+      }
+    }
+    if (-not $ok) { throw "Compress-Archive failed after retries" }
+    Write-Host "[DONE] Package: $zipPath"
+  } catch {
+    Write-Warning "Compress-Archive failed; trying tar fallback..."
+    $tar = Get-Command tar -ErrorAction SilentlyContinue
+    if (-not $tar) { throw }
+    & $tar.Source -a -c -f $zipPath -C $pkgRoot .
+    Write-Host "[DONE] Package (tar): $zipPath"
+  }
 }
 
 if ($WithChecksums) {

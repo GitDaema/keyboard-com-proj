@@ -60,7 +60,19 @@ def main():
     try:
         if rc is None:
             raise RuntimeError("rgb_controller 모듈을 불러오지 못했습니다")
-        rc.connect()
+        try:
+            rc.connect()
+        except Exception as ex:
+            try:
+                print("[ERROR] OpenRGB 연결 실패:", ex)
+                print("[HINT] OpenRGB UI에서 SDK Server를 Start하고, 관리자 권한 실행을 시도해 보세요.")
+            except Exception:
+                pass
+            try:
+                input("Enter 키를 누르면 종료합니다.")
+            except Exception:
+                pass
+            return
         time.sleep(0.6)
         rc.init_all_keys()
         # 시작 대기 동안 PAUSE 표시
