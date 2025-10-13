@@ -13,13 +13,13 @@ Usage:
   display_operator("+")
 
 This module only uses rgb_controller public helpers and keeps updates atomic
-so it won’t disturb other parts of the system.
+so it won?�t disturb other parts of the system.
 """
 
 from typing import Dict, Iterable, Optional, Set, Tuple
 import os
 
-from openrgb.utils import RGBColor
+from rgb_types import RGBColor
 
 from rgb_controller import set_labels_atomic, set_key_color
 import utils.color_presets as cp
@@ -130,11 +130,10 @@ _reg(["<=", "le"], "cmp", [3, 5, 7, 1, 2, 3])   # '<' + bottom row
 _reg([">=", "ge"], "cmp", [1, 5, 9, 7, 8, 9])   # '>' + top row
 
 # Bitwise
-_reg(["&", "and"], "bit", [1, 4, 8, 6, 3])      # ∧
-_reg(["|", "bor"], "bit", [2, 5, 8])            # |
+_reg(["&", "and"], "bit", [1, 4, 8, 6, 3])      # ??_reg(["|", "bor"], "bit", [2, 5, 8])            # |
 _reg(["^", "xor"], "bit", [1, 3, 7, 9])         # X corners
 _reg(["~", "not", "bnot"], "bit", [7, 8, 9])    # overline (NOT)
-_reg(["nand"], "bit", [1, 4, 8, 6, 3, 7, 8, 9])  # ∧ + overline
+_reg(["nand"], "bit", [1, 4, 8, 6, 3, 7, 8, 9])  # ??+ overline
 _reg(["nor"], "bit", [2, 5, 7, 8, 9])            # | + overline
 _reg(["xnor", "eqv"], "bit", [1, 3, 7, 8, 9])   # X + overline
 
@@ -145,8 +144,7 @@ _reg(["rol"], "shift", [1, 4, 5, 6, 7, 2, 8])
 _reg(["ror"], "shift", [3, 4, 5, 6, 9, 2, 8])
 
 # Logical
-_reg(["&&", "land"], "logic", [1, 4, 8, 5, 6, 3])  # thicker ∧
-_reg(["||", "lor"], "logic", [2, 5, 8])
+_reg(["&&", "land"], "logic", [1, 4, 8, 5, 6, 3])  # thicker ??_reg(["||", "lor"], "logic", [2, 5, 8])
 _reg(["!", "lnot"], "logic", [8, 5, 2])
 
 # No-op: center dim or fully off. Keep very dim to show reserved area.
@@ -186,3 +184,4 @@ __all__ = [
     "CATEGORY_COLOR",
     "set_op_block_debug",
 ]
+

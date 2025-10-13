@@ -1,4 +1,4 @@
-from openrgb.utils import RGBColor
+from rgb_types import RGBColor
 
 RED         = RGBColor(255,  0,  0)
 DARK_RED    = RGBColor(150, 0, 0)
@@ -40,3 +40,4 @@ HEX_COLORS = {
 
     0xF: RGBColor(255,255,255),      # White
 }
+

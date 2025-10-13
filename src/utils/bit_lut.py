@@ -1,10 +1,10 @@
-﻿"""bit_lut: ALU operations via LUT using keyboard LEDs.
+"""bit_lut: ALU operations via LUT using keyboard LEDs.
 Fast-mode supports group-atomic visual commits for SRC1/SRC2/RES.
 """
 
 from typing import Sequence
 from utils.keyboard_presets import SRC1, SRC2, RES, STEP_LABELS, BINARY_COLORS
-from openrgb.utils import RGBColor
+from rgb_types import RGBColor
 from rgb_controller import set_labels_atomic, is_group_atomic
 
 # 1-bit LUTs
@@ -304,3 +304,4 @@ def shr8_via_lut(mem, *, src: Sequence[str] = SRC1, dst: Sequence[str] = RES,
             for i in range(1, 8):
                 mem.set(dst[i], mem.get(src[i-1]))
             mem.set(dst[0], msb_val)
+

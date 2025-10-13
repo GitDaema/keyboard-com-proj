@@ -4,24 +4,24 @@ from __future__ import annotations
 LED-bus handshake utilities
 
 목표:
-- 키보드 LED 4키(right_alt/right_fn/menu/right_ctrl)를 메모리/IO 버스의 제어선으로 사용.
-- CPU의 변수 접근(get/set)을 버스 사이클로 감싸고, ACK를 LED에서 읽어 진행/대기 결정.
-- 내부 ACK(자가 응답)도 선택 가능하나, 항상 LED 읽기/쓰기를 통해 상태를 판정.
+- ?�보??LED 4??right_alt/right_fn/menu/right_ctrl)�?메모�?IO 버스???�어?�으�??�용.
+- CPU??변???�근(get/set)??버스 ?�이?�로 감싸�? ACK�?LED?�서 ?�어 진행/?��?결정.
+- ?��? ACK(?��? ?�답)???�택 가?�하?? ??�� LED ?�기/?�기�??�해 ?�태�??�정.
 
-버스 제어선 매핑 (utils.keyboard_presets에 정의):
-- BUS_ADDR_VALID: right_alt (주소 유효)
-- BUS_RD:         right_fn  (읽기 스트로브)
-- BUS_WR:         menu      (쓰기 스트로브)
-- BUS_ACK:        right_ctrl(응답/대기)
+버스 ?�어??매핑 (utils.keyboard_presets???�의):
+- BUS_ADDR_VALID: right_alt (주소 ?�효)
+- BUS_RD:         right_fn  (?�기 ?�트로브)
+- BUS_WR:         menu      (?�기 ?�트로브)
+- BUS_ACK:        right_ctrl(?�답/?��?
 
 주의:
-- 하드웨어 호출은 rgb_controller를 통해 수행. 가능하면 set_labels_atomic으로 프레임 단위 적용.
-- 변수 키(VARIABLE_KEYS)에 한해 핸드셰이크를 적용하여 과도한 토글을 방지.
+- ?�드?�어 ?�출?� rgb_controller�??�해 ?�행. 가?�하�?set_labels_atomic?�로 ?�레???�위 ?�용.
+- 변????VARIABLE_KEYS)???�해 ?�드?�이?��? ?�용?�여 과도???��???방�?.
 """
 
 from typing import Dict, Tuple, Any
 import time
-from openrgb.utils import RGBColor
+from rgb_types import RGBColor
 from rgb_controller import set_labels_atomic, set_key_color, get_key_color
 from utils.keyboard_presets import (
     BINARY_COLORS,
@@ -57,12 +57,12 @@ class BusInterface:
                  settle_ms: int = 8, ack_timeout_ms: int = 200) -> None:
         """
         ack_mode: 'internal' | 'external' | 'auto'
-          - internal: 컨트롤러가 ACK LED를 직접 펄스(쓰기) 후 자신이 읽고 진행
-          - external: 외부(다른 에이전트)가 ACK를 켜줄 때까지 대기(읽기만)
-          - auto: 먼저 외부 ACK 대기, 타임아웃이면 내부 펄스
-        ack_pulse_ms: 내부 ACK 펄스 유지 시간
-        settle_ms: 제어선 셋업 후 정착 대기(LED 하드웨어 반영 대기)
-        ack_timeout_ms: ACK 대기 제한
+          - internal: 컨트롤러가 ACK LED�?직접 ?�스(?�기) ???�신???�고 진행
+          - external: ?��?(?�른 ?�이?�트)가 ACK�?켜줄 ?�까지 ?��??�기�?
+          - auto: 먼�? ?��? ACK ?��? ?�?�아?�이�??��? ?�스
+        ack_pulse_ms: ?��? ACK ?�스 ?��? ?�간
+        settle_ms: ?�어???�업 ???�착 ?��?LED ?�드?�어 반영 ?��?
+        ack_timeout_ms: ACK ?��??�한
         """
         self.ack_mode = ack_mode
         self.ack_pulse_ms = max(1, int(ack_pulse_ms))
@@ -120,10 +120,9 @@ class BusInterface:
         self._apply_signals({BUS_ADDR_VALID: True, BUS_RD: False, BUS_WR: True})
 
     def end_cycle(self) -> None:
-        # All off (ACK는 내부 펄스 시 소거)
+        # All off (ACK???��? ?�스 ???�거)
         self._apply_signals({BUS_ADDR_VALID: False, BUS_RD: False, BUS_WR: False})
-        # 외부 ACK 모드에서도 사이클 종료 시점에 ACK가 켜져 있으면 자연 소거를 기다릴 수 있으나
-        # 여기서는 내부 ACK만 소거한다.
+        # ?��? ACK 모드?�서???�이??종료 ?�점??ACK가 켜져 ?�으�??�연 ?�거�?기다�????�으??        # ?�기?�는 ?��? ACK�??�거?�다.
 
     def handshake(self) -> bool:
         mode = (self.ack_mode or "internal").lower()
@@ -147,11 +146,11 @@ class BusInterface:
 
 
 class BusMemory:
-    """메모리 래퍼: 변수 키 접근에 버스 핸드셰이크를 강제한다.
+    """메모�??�퍼: 변?????�근??버스 ?�드?�이?��? 강제?�다.
 
-    - inner: DataMemoryRGBVisual(또는 호환) 인스턴스
+    - inner: DataMemoryRGBVisual(?�는 ?�환) ?�스?�스
     - bus:   BusInterface
-    - only_variable_keys: True면 VARIABLE_KEYS에 해당하는 이름에만 핸드셰이크 적용
+    - only_variable_keys: True�?VARIABLE_KEYS???�당?�는 ?�름?�만 ?�드?�이???�용
     """
     def __init__(self, inner: Any, bus: BusInterface, *, only_variable_keys: bool = True) -> None:
         self._inner = inner
@@ -205,8 +204,8 @@ class BusMemory:
                 except Exception:
                     pass
                 raise Exception("BUS_ACK_FAIL_READ")
-            # 핸드셰이크 결과와 무관하게 LED가 진실 소스로 동작하므로 값을 읽는다.
-            # (외부 ACK 사용 시에는 ok가 진행 조건 의미를 갖는다)
+            # ?�드?�이??결과?� 무�??�게 LED가 진실 ?�스�??�작?��?�?값을 ?�는??
+            # (?��? ACK ?�용 ?�에??ok가 진행 조건 ?��?�?갖는??
             val = self._inner.get(name)
             # Emit watch event after successful read with latency metadata
             try:
@@ -255,7 +254,7 @@ class BusMemory:
 
     # Optional helpers used by CPU/DataMemoryRGBVisual
     def set_flag(self, label: str, on: bool) -> None:
-        # 플래그 업데이트에는 버스 강제 적용하지 않음 (시각 신호)
+        # ?�래�??�데?�트?�는 버스 강제 ?�용?��? ?�음 (?�각 ?�호)
         if hasattr(self._inner, "set_flag"):
             self._inner.set_flag(label, on)
 
@@ -263,3 +262,4 @@ class BusMemory:
         if hasattr(self._inner, "get_flag"):
             return bool(self._inner.get_flag(label))
         return False
+

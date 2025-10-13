@@ -1,5 +1,5 @@
 from typing import Dict, Tuple, Any, List
-from openrgb.utils import RGBColor
+from rgb_types import RGBColor
 from rgb_controller import set_labels_atomic, set_key_color, get_key_color
 import time
 from utils.keyboard_presets import (
@@ -30,10 +30,10 @@ def _bit_color(role: str, bit: int) -> RGBColor:
 
 
 def set_ir(op_nibble: int, dst_nibble: int, arg_byte: int) -> None:
-    """IR 12키에 16비트(2바이트)를 혼합 모드로 표시.
-    - F1,F2: OP[3:2], OP[1:0] (2비트/키)
-    - F3,F4: DST[3:2], DST[1:0] (2비트/키)
-    - F5~F12: ARG[7]..ARG[0] (1비트/키)
+    """IR 12?�에 16비트(2바이??�??�합 모드�??�시.
+    - F1,F2: OP[3:2], OP[1:0] (2비트/??
+    - F3,F4: DST[3:2], DST[1:0] (2비트/??
+    - F5~F12: ARG[7]..ARG[0] (1비트/??
     """
     opn = int(op_nibble) & 0xF
     dst = int(dst_nibble) & 0xF
@@ -68,19 +68,19 @@ def set_ir(op_nibble: int, dst_nibble: int, arg_byte: int) -> None:
 
     payload: Dict[str, RGBColor] = {}
 
-    # OP nibble → two 2-bit keys
+    # OP nibble ??two 2-bit keys
     op_hi2 = (opn >> 2) & 0x3
     op_lo2 = opn & 0x3
     payload[IR_OP_2BIT[0]] = _pair_colors("OP", op_hi2)
     payload[IR_OP_2BIT[1]] = _pair_colors("OP", op_lo2)
 
-    # DST nibble → two 2-bit keys
+    # DST nibble ??two 2-bit keys
     dst_hi2 = (dst >> 2) & 0x3
     dst_lo2 = dst & 0x3
     payload[IR_DST_2BIT[0]] = _pair_colors("DST", dst_hi2)
     payload[IR_DST_2BIT[1]] = _pair_colors("DST", dst_lo2)
 
-    # ARG byte bits → eight 1-bit keys (b7..b0)
+    # ARG byte bits ??eight 1-bit keys (b7..b0)
     for i, lab in enumerate(IR_ARG_1BIT):
         bit = (arg >> (7 - i)) & 1  # F5=b7 ... F12=b0
         payload[lab] = _bit_color("ARG", bit)
@@ -127,7 +127,7 @@ def _var_id(name: Any) -> int:
 
 
 def encode_from_decoded(decoded: Tuple[str, tuple[Any, ...]]) -> Tuple[int, int, int]:
-    """(op,args) → (op4, dst4, arg8) 근사 인코딩만 계산해서 반환."""
+    """(op,args) ??(op4, dst4, arg8) 근사 ?�코?�만 계산?�서 반환."""
     op, args = decoded
     op_u = str(op).upper()
     op4 = int(_OPCODES.get(op_u, 0)) & 0xF
@@ -388,15 +388,15 @@ def _to_int(s: str) -> int:
     return int(t, 0)
 
 def encode_from_source_line(line: str) -> Tuple[int, int, int] | None:
-    """한 줄 소스(라벨/고수준 포함)를 기계어 근사 형태(op4,dst4,arg8)로 변환해 IR를 갱신.
-    - 가능하면 parse_line 결과에서 '기계어급' 첫 명령을 사용.
-    - 전부 마이크로옵이면, 간단한 규칙으로 MOV/MOVI/ADD/ADDI/SUB/SUBI를 추정.
+    """??�??�스(?�벨/고수준 ?�함)�?기계??근사 ?�태(op4,dst4,arg8)�?변?�해 IR�?갱신.
+    - 가?�하�?parse_line 결과?�서 '기계?�급' �?명령???�용.
+    - ?��? 마이?�로?�이�? 간단??규칙?�로 MOV/MOVI/ADD/ADDI/SUB/SUBI�?추정.
     """
     s = (line or "").strip()
     if not s or s.startswith('#'):
         return None
     if s.endswith(':') and (':' not in s[:-1]):
-        # 라벨 줄은 IR 변경하지 않음
+        # ?�벨 줄�? IR 변경하지 ?�음
         return None
 
     try:
@@ -404,12 +404,12 @@ def encode_from_source_line(line: str) -> Tuple[int, int, int] | None:
     except Exception:
         ops = []
 
-    # 1) 기계어급이 있으면 그걸로 표시
+    # 1) 기계?�급???�으�?그걸�??�시
     for op, args in ops:
         if str(op).upper() in _MACHINE_OPS:
             return encode_from_decoded((op, args))
 
-    # 2) 간단 규칙으로 고수준 대입식 해석
+    # 2) 간단 규칙?�로 고수준 ?�?�식 ?�석
     if '=' in s:
         left, right = [t.strip() for t in s.split('=', 1)]
         if '+' in right:
@@ -425,15 +425,14 @@ def encode_from_source_line(line: str) -> Tuple[int, int, int] | None:
                 return encode_from_decoded(("SUBI", (left, _to_int(b))))
             if left == a and not _is_int_literal(b):
                 return encode_from_decoded(("SUB", (left, b)))
-            # 기타 케이스는 보수적으로 MOV로 표시
+            # 기�? 케?�스??보수?�으�?MOV�??�시
             return encode_from_decoded(("MOV", (left, a)))
-        # 단순 대입
-        if _is_int_literal(right):
+        # ?�순 ?�??        if _is_int_literal(right):
             return encode_from_decoded(("MOVI", (left, _to_int(right))))
         else:
             return encode_from_decoded(("MOV", (left, right)))
 
-    # 3) 기타는 NOP로 표시(변경 최소화)
+    # 3) 기�???NOP�??�시(변�?최소??
     return encode_from_decoded(("NOP", ()))
 
 
@@ -488,3 +487,4 @@ def encode_from_source_line_fixed(line: str) -> Tuple[int, int, int] | None:
         # Simple move x = y
         return encode_from_decoded(("MOV", (left, right)))
     return encode_from_decoded(("NOP", ()))
+

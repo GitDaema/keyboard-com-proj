@@ -1,12 +1,12 @@
-﻿# utils/bit_lut.py
+# utils/bit_lut.py
 
 from typing import Tuple, Sequence
 from utils.keyboard_presets import SRC1, SRC2, RES, STEP_LABELS, BINARY_COLORS
-from openrgb.utils import RGBColor
+from rgb_types import RGBColor
 from rgb_controller import set_labels_atomic, is_group_atomic
 
-# 1鍮꾪듃 Full Adder ?? (A,B,Cin) -> (Sum,Cout)
-# ?쇰━/?곗닠 ?곗궛???놁씠, ?쒖닔 留ㅽ븨留??ъ슜
+# 1비트 Full Adder ?? (A,B,Cin) -> (Sum,Cout)
+# ?�리/?�술 ?�산???�이, ?�수 매핑�??�용
 ADD_LUT = {
     ("0","0","0"): ("0","0"),
     ("0","0","1"): ("1","0"),
@@ -18,7 +18,7 @@ ADD_LUT = {
     ("1","1","1"): ("1","1"),
 }
 
-# 1鍮꾪듃 Full Subtractor ?? (A,B,Bin) -> (Diff,Bout)
+# 1비트 Full Subtractor ?? (A,B,Bin) -> (Diff,Bout)
 SUB_LUT = {
     ("0","0","0"): ("0","0"),
     ("0","0","1"): ("1","1"),
@@ -30,14 +30,14 @@ SUB_LUT = {
     ("1","1","1"): ("1","1"),
 }
 
-# 1鍮꾪듃 ?쇰━?곗궛 ?? (A,B) -> (Res)
+# 1비트 ?�리?�산 ?? (A,B) -> (Res)
 AND_LUT = {("0","0"):"0", ("0","1"):"0", ("1","0"):"0", ("1","1"):"1"}
 OR_LUT  = {("0","0"):"0", ("0","1"):"1", ("1","0"):"1", ("1","1"):"1"}
 XOR_LUT = {("0","0"):"0", ("0","1"):"1", ("1","0"):"1", ("1","1"):"0"}
 
 
 def _to_bit_str(x: int) -> str:
-    # 0 -> "0", 洹???-> "1"  (遺덈━??LED?대?濡?0/1濡쒕쭔 ?ㅼ뼱??
+    # 0 -> "0", �???-> "1"  (불리??LED?��?�?0/1로만 ?�어??
     return "1" if int(x) != 0 else "0"
 
 def _from_bit_str(b: str) -> int:
@@ -46,9 +46,9 @@ def _from_bit_str(b: str) -> int:
 def add8_via_lut(mem, *, src1: Sequence[str] = SRC1, src2: Sequence[str] = SRC2, dst: Sequence[str] = RES,
                  lsb_first: bool = True) -> None:
     """
-    LED 鍮꾪듃??src1, src2瑜?LUT濡??뷀빐 dst??湲곕줉.
-    - ?곗궛??+, &, ^ ?? ?놁씠 dict 議고쉶留뚯쑝濡?泥섎━.
-    - 湲곕낯 媛?? 諛곗뿴??0踰??몃뜳?ㅺ? LSB.
+    LED 비트??src1, src2�?LUT�??�해 dst??기록.
+    - ?�산??+, &, ^ ?? ?�이 dict 조회만으�?처리.
+    - 기본 가?? 배열??0�??�덱?��? LSB.
     """
     idx_range = range(0, 8) if lsb_first else range(7, -1, -1)
     results: dict[str, int] = {}
@@ -63,7 +63,7 @@ def add8_via_lut(mem, *, src1: Sequence[str] = SRC1, src2: Sequence[str] = SRC2,
         a = _to_bit_str(mem.get(src1[i]))
         b = _to_bit_str(mem.get(src2[i]))
         s, cout = ADD_LUT[(a, b, cin)]
-        # ?④퀎 ?쒖떆: Cin -> Sum -> Cout (?쒖떆???ㅺ? ?덉쓣 ?뚮쭔)
+        # ?�계 ?�시: Cin -> Sum -> Cout (?�시???��? ?�을 ?�만)
         try:
             mem.set(STEP_LABELS["CIN"], _from_bit_str(cin))
             mem.set(STEP_LABELS["SUM"], _from_bit_str(s))
@@ -82,7 +82,7 @@ def add8_via_lut(mem, *, src1: Sequence[str] = SRC1, src2: Sequence[str] = SRC2,
             cin = "0" if int(mem.get(STEP_LABELS["COUT"])) == 0 else "1"
         except Exception:
             cin = cout
-    # ?쒖떆???꾧린 (?덉쑝硫?
+    # ?�시???�기 (?�으�?
     if is_group_atomic() and results:
         payload = {}
         for lab, bit in results.items():
@@ -101,7 +101,7 @@ def add8_via_lut(mem, *, src1: Sequence[str] = SRC1, src2: Sequence[str] = SRC2,
 def sub8_via_lut(mem, *, src1: Sequence[str] = SRC1, src2: Sequence[str] = SRC2, dst: Sequence[str] = RES,
                  lsb_first: bool = True) -> None:
     """
-    LED 鍮꾪듃??src1 - src2瑜?LUT濡?怨꾩궛??dst??湲곕줉.
+    LED 비트??src1 - src2�?LUT�?계산??dst??기록.
     """
     idx_range = range(0, 8) if lsb_first else range(7, -1, -1)
     # Initialize borrow-in (Bin) via LED to 0
@@ -242,34 +242,35 @@ def xor8_via_lut(mem, *, src1: Sequence[str] = SRC1, src2: Sequence[str] = SRC2,
 def shl8_via_lut(mem, *, src: Sequence[str] = SRC1, dst: Sequence[str] = RES,
                  lsb_first: bool = True) -> int:
     """
-    src瑜??쇱そ?쇰줈 1鍮꾪듃 ?쒗봽?명븯??dst??湲곕줉.
-    諛?ㅻ굹??MSB(遺?몃퉬??瑜?諛섑솚. (V flag 怨꾩궛??
+    src�??�쪽?�로 1비트 ?�프?�하??dst??기록.
+    밀?�나??MSB(부?�비??�?반환. (V flag 계산??
     """
-    if lsb_first: # LSB媛 ?몃뜳??0
+    if lsb_first: # LSB가 ?�덱??0
         msb_val = mem.get(src[7])
         for i in range(7): # 0..6
             mem.set(dst[i+1], mem.get(src[i]))
-        mem.set(dst[0], 0) # LSB??0?쇰줈 梨꾩?
+        mem.set(dst[0], 0) # LSB??0?�로 채�?
         return msb_val
-    else: # MSB媛 ?몃뜳??0
+    else: # MSB가 ?�덱??0
         msb_val = mem.get(src[0])
         for i in range(7): # 0..6
             mem.set(dst[i], mem.get(src[i+1]))
-        mem.set(dst[7], 0) # LSB??0?쇰줈 梨꾩?
+        mem.set(dst[7], 0) # LSB??0?�로 채�?
         return msb_val
 
 def shr8_via_lut(mem, *, src: Sequence[str] = SRC1, dst: Sequence[str] = RES,
                  lsb_first: bool = True) -> None:
     """
-    src瑜??ㅻⅨ履쎌쑝濡?1鍮꾪듃 ?곗닠 ?쒗봽??ASR)?섏뿬 dst??湲곕줉.
+    src�??�른쪽으�?1비트 ?�술 ?�프??ASR)?�여 dst??기록.
     """
-    if lsb_first: # LSB媛 ?몃뜳??0
+    if lsb_first: # LSB가 ?�덱??0
         msb_val = mem.get(src[7])
         for i in range(1, 8): # 1..7
             mem.set(dst[i-1], mem.get(src[i]))
-        mem.set(dst[7], msb_val) # MSB(遺?몃퉬?? 蹂댁〈
-    else: # MSB媛 ?몃뜳??0
+        mem.set(dst[7], msb_val) # MSB(부?�비?? 보존
+    else: # MSB가 ?�덱??0
         msb_val = mem.get(src[0])
         for i in range(1, 8): # 1..7
             mem.set(dst[i], mem.get(src[i-1]))
-        mem.set(dst[0], msb_val) # MSB(遺?몃퉬?? 蹂댁〈
+        mem.set(dst[0], msb_val) # MSB(부?�비?? 보존
+

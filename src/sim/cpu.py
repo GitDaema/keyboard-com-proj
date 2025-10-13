@@ -1,4 +1,4 @@
-﻿# sim/cpu.py
+# sim/cpu.py
 from typing import Dict, Any, List, Tuple, Optional
 import time
 import threading
@@ -43,46 +43,46 @@ from utils.operator_indicator import display_operator, set_op_block_debug
 
 """
 # =========================
-# CPU/Parser 紐낅졊???뺣━ (signed 踰꾩쟾)
+# CPU/Parser 명령???�리 (signed 버전)
 # =========================
 #
-# ??湲곕낯 洹쒖튃
-# - 紐⑤뱺 怨꾩궛? signed 8鍮꾪듃(-128..127)濡??숈옉.
-# - ?뚮옒洹?
-#     Z (Zero)      : 寃곌낵媛 0?대㈃ 1
-#     N (Negative)  : 寃곌낵媛 ?뚯닔(遺?몃퉬??1)硫?1
-#     V (oVerflow)  : signed overflow 諛쒖깮 ??1 (ADD/SHL/SUB/CMP ??
-# - PC??"?ㅼ쓬 紐낅졊???꾩튂". 蹂댄넻 ??移몄뵫 利앷??섏?留?
-#   ?먰봽/遺꾧린(JMP, BEQ ??媛 ?ㅽ뻾?섎㈃ 吏곸젒 諛붾?
-# - 利됱떆媛??쒓린: #10, #0x1F, #-3 ??紐⑤몢 ?덉슜.
+# ??기본 규칙
+# - 모든 계산?� signed 8비트(-128..127)�??�작.
+# - ?�래�?
+#     Z (Zero)      : 결과가 0?�면 1
+#     N (Negative)  : 결과가 ?�수(부?�비??1)�?1
+#     V (oVerflow)  : signed overflow 발생 ??1 (ADD/SHL/SUB/CMP ??
+# - PC??"?�음 명령???�치". 보통 ??칸씩 증�??��?�?
+#   ?�프/분기(JMP, BEQ ??가 ?�행?�면 직접 바�?
+# - 즉시�??�기: #10, #0x1F, #-3 ??모두 ?�용.
 #
-# ??湲곕낯 紐낅졊??
-# - NOP / LABEL / HALT / PRINT (?숈씪)
+# ??기본 명령??
+# - NOP / LABEL / HALT / PRINT (?�일)
 #
-# ??媛??ｊ린 / ?뷀븯湲?/ 鍮쇨린
-# - MOVI dst, #imm         ; dst ??imm (signed 踰붿쐞濡??섑븨 ???
+# ??�??�기 / ?�하�?/ 빼기
+# - MOVI dst, #imm         ; dst ??imm (signed 범위�??�핑 ?�??
 # - MOV  dst, src          ; dst ??src
-# - ADDI dst, #imm         ; dst ??dst + imm (Z/N/V 媛깆떊)
-# - ADD  dst, src          ; dst ??dst + src (Z/N/V 媛깆떊)
-# - SUBI dst, #imm         ; dst ??dst - imm (Z/N/V 媛깆떊)
-# - SUB  dst, src          ; dst ??dst - src (Z/N/V 媛깆떊)
+# - ADDI dst, #imm         ; dst ??dst + imm (Z/N/V 갱신)
+# - ADD  dst, src          ; dst ??dst + src (Z/N/V 갱신)
+# - SUBI dst, #imm         ; dst ??dst - imm (Z/N/V 갱신)
+# - SUB  dst, src          ; dst ??dst - src (Z/N/V 갱신)
 #
-# ??鍮꾪듃 ?곗궛 (Z/N 媛깆떊, V=0)
+# ??비트 ?�산 (Z/N 갱신, V=0)
 # - AND/OR/XOR
 #
-# ???쒗봽??
-# - SHL dst                ; ?곗닠???섎????쇱そ ?쒗봽??理쒖긽??鍮꾪듃 蹂?붾줈 V ?먮떒)
-# - SHR dst                ; ?곗닠 ?쒗봽??ASR, 遺???좎?). V=0
+# ???�프??
+# - SHL dst                ; ?�술???��????�쪽 ?�프??최상??비트 변?�로 V ?�단)
+# - SHR dst                ; ?�술 ?�프??ASR, 부???��?). V=0
 #
-# ??鍮꾧탳 / 遺꾧린 (signed)
-# - CMP a, b               ; a-b??signed 寃곌낵 湲곕컲?쇰줈 Z/N/V 媛깆떊(寃곌낵??踰꾨┝)
+# ??비교 / 분기 (signed)
+# - CMP a, b               ; a-b??signed 결과 기반?�로 Z/N/V 갱신(결과??버림)
 # - CMPI a, #imm
 #
-# - JMP label              ; 臾댁“嫄?遺꾧린
+# - JMP label              ; 무조�?분기
 # - BEQ/BNE                ; Z=1 / Z=0
 # - BMI/BPL                ; N=1 / N=0
 # - BVS/BVC                ; V=1 / V=0
-#   (?섏쐞?명솚) BCS/BCC     ; V=1 / V=0 濡??댁꽍
+#   (?�위?�환) BCS/BCC     ; V=1 / V=0 �??�석
 """
 
 def _wrap_s8(x: int) -> int:
@@ -107,17 +107,17 @@ class CPU:
         self.halted = False
         self.debug = debug
 
-        # ?뚮옒洹? Zero / Negative / oVerflow / Carry
+        # ?�래�? Zero / Negative / oVerflow / Carry
         self.flags: Dict[str, int] = {"Z": 0, "N": 0, "V": 0, "C": 0}
         self._pc_overridden: bool = False
 
-        self.interactive = interactive                         # ???ㅽ뀦 ?ㅽ뻾 ?뚮옒洹?        self._continue_run = False                             # ??'c' ?낅젰 ??怨꾩냽 吏꾪뻾
-        self.use_isa = use_isa                                 # ??ISA 紐⑤뱶 ?ъ슜 ?щ?
+        self.interactive = interactive                         # ???�텝 ?�행 ?�래�?        self._continue_run = False                             # ??'c' ?�력 ??계속 진행
+        self.use_isa = use_isa                                 # ??ISA 모드 ?�용 ?��?
 
         # ISA instruction stream (when use_isa=True)
         self._isa: list[AsmInsn] = []
         # Control-plane integration (LED-gated run loop)
-        # 湲곕낯媛?False: ?명꽣?숉떚釉?紐⑤뱶?먯꽌 肄섏넄 ?낅젰 ?곗꽑
+        # 기본�?False: ?�터?�티�?모드?�서 콘솔 ?�력 ?�선
         self.cp_enabled: bool = False
         self._trace_log: list[Dict[str, Any]] = []
         # Track if a reset was requested during a step so we don't overwrite PC later in the same step
@@ -307,7 +307,7 @@ class CPU:
         except Exception:
             pass
 
-    # ---------- ?몃? API ----------
+    # ---------- ?��? API ----------
     def load_program(self, lines: List[str], *, debug: bool | None = None) -> None:
         dbg = self.debug if debug is None else bool(debug)
         # Preserve originals for runtime switching
@@ -345,7 +345,7 @@ class CPU:
         self.flags["V"] = 0
         self.flags["C"] = 0
 
-        # 珥덇린 ?뚮옒洹??곹깭瑜?LED??1??諛섏쁺(Off ?곹깭?쇰룄 諛붾줈 蹂댁씠寃?
+        # 초기 ?�래�??�태�?LED??1??반영(Off ?�태?�도 바로 보이�?
         try:
             self._sync_flag_leds()
         except Exception:
@@ -538,7 +538,7 @@ class CPU:
             # Fast path: for RES only, batch-commit to visually latch bits together
             try:
                 from rgb_controller import is_group_atomic, set_labels_atomic
-                from openrgb.utils import RGBColor
+                from rgb_types import RGBColor
                 if is_group_atomic() and str(grp).upper() == "RES":
                     payload: Dict[str, RGBColor] = {}
                     bits_map: Dict[str, int] = {}
@@ -856,15 +856,15 @@ class CPU:
         return not self.halted
 
     def _maybe_pause(self) -> None:
-        """interactive 紐⑤뱶硫? ???곗궛 ?앸궇 ???ъ슜???낅젰 ?湲?
-        [Enter]=???ㅽ뀦, 'c'=?곗냽 ?ㅽ뻾, 'q'=利됱떆 醫낅즺"""
+        """interactive 모드�? ???�산 ?�날 ???�용???�력 ?��?
+        [Enter]=???�텝, 'c'=?�속 ?�행, 'q'=즉시 종료"""
         # LED control-plane active? skip interactive blocking
         if getattr(self, "cp_enabled", False):
             return
         if not self.interactive:
             return
         if self._continue_run:
-            # 鍮꾩감?? 諛깃렇?쇱슫??紐낅졊 ??泥섎━ ??利됱떆 蹂듦?
+            # 비차?? 백그?�운??명령 ??처리 ??즉시 복�?
             try:
                 self._drain_cmd_queue()
             except Exception:
@@ -1085,15 +1085,15 @@ class CPU:
                 pass
 
     def _sync_flag_leds(self) -> None:
-        """?꾩옱 Z/N/V 媛믪쓣 吏?뺣맂 ??LED??諛섏쁺"""
+        """?�재 Z/N/V 값을 지?�된 ??LED??반영"""
         if hasattr(self.mem, "set_flag"):
             for k, led in FLAG_LABELS.items():
                 self.mem.set_flag(led, bool(self.flags.get(k, 0)))
 
     def run_led(self) -> None:
-        """LED 而⑦듃濡??뚮젅?몄뿉 ?섑빐 寃뚯씠?낅릺???ㅽ뻾 猷⑦봽.
-        grave/esc/tab/caps/left_shift ??而щ윭瑜?二쇨린?곸쑝濡??먮룆?섏뿬
-        RUN/PAUSE/HALT/R_SOFT/R_HARD/STEP/.. 동작을 LED 색으로 트리거합니다.
+        """LED 컨트�??�레?�에 ?�해 게이?�되???�행 루프.
+        grave/esc/tab/caps/left_shift ??컬러�?주기?�으�??�독?�여
+        RUN/PAUSE/HALT/R_SOFT/R_HARD/STEP/.. ������ LED ������ Ʈ�����մϴ�.
         """
         self._println("\n[RUN-LED] Starting LED-gated execution...")
         # Default to normal step mode (CONT); start paused
@@ -1219,7 +1219,7 @@ class CPU:
             except Exception:
                 pass
 
-            # 二??곹깭(RUN/PAUSE/HALT/FAULT)
+            # �??�태(RUN/PAUSE/HALT/FAULT)
             if st.run in ("HALT", "FAULT"):
                 self.halted = True
                 # Preserve the last shown panel state (e.g., FAULT red)
@@ -1254,7 +1254,7 @@ class CPU:
                 time.sleep(0.02)
                 continue
 
-            # RUN ?곹깭: ?ㅽ뀦 紐⑤뱶???곕씪 ?섑뻾
+            # RUN ?�태: ?�텝 모드???�라 ?�행
             cont = True
             if st.step == "INSTR":
                 # Reset per-step write flag before executing a step
@@ -1375,7 +1375,7 @@ class CPU:
                 if not cont:
                     break
 
-        # 醫낅즺 泥섎━
+        # 종료 처리
         try:
             clear_stages()
         except Exception:
@@ -1389,7 +1389,7 @@ class CPU:
             pass
 
     def _soft_reset_visuals(self) -> None:
-        """?꾨줈洹몃옩? ?좎???梨?PC/IR/Flags 諛??쒖떆瑜?珥덇린??"""
+        """?�로그램?� ?��???�?PC/IR/Flags �??�시�?초기??"""
         self.pc.reset()
         self.halted = False
         self.ir.clear()
@@ -1438,7 +1438,7 @@ class CPU:
                 except Exception:
                     pass
                 try:
-                    # Visual OFF (black) — variables appear cleared on keyboard
+                    # Visual OFF (black) ? variables appear cleared on keyboard
                     set_key_color(name, cp.BLACK)
                 except Exception:
                     pass
@@ -1502,7 +1502,7 @@ class CPU:
 
         # Fallback: directly drive keys to OFF using presets
         try:
-            from openrgb.utils import RGBColor
+            from rgb_types import RGBColor
             from rgb_controller import set_key_color
             _, off_addr = BINARY_COLORS.get(BUS_ADDR_VALID, ((0,0,0),(0,0,0)))
             _, off_rd   = BINARY_COLORS.get(BUS_RD,         ((0,0,0),(0,0,0)))
@@ -1540,7 +1540,7 @@ class CPU:
                 break
             if not cont:
                 break
-        # ?ㅽ뻾 醫낅즺 利됱떆 ?④퀎 ?쒖떆 ?뚮벑(WRITEBACK ?ы븿)
+        # ?�행 종료 즉시 ?�계 ?�시 ?�등(WRITEBACK ?�함)
         try:
             clear_stages()
         except Exception:
@@ -1563,8 +1563,8 @@ class CPU:
         labels = self._group_labels(grp)
         u8 &= 0xFF
         width = len(labels)
-        # labels[-1]??LSB媛 ?섎룄濡???씤?깆떛
-        for i in range(width):  # i=0..7 -> 鍮꾪듃 i
+        # labels[-1]??LSB가 ?�도�???��?�싱
+        for i in range(width):  # i=0..7 -> 비트 i
             bit = (u8 >> i) & 1
             lab = labels[width - 1 - i]
             self.mem.set(lab, bit)
@@ -1577,13 +1577,13 @@ class CPU:
         labels = self._group_labels(grp)
         width = len(labels)
         val = 0
-        # labels[-1]??LSB ????씤?깆떛?쇰줈 ?쎌뼱??i踰덉㎏ 鍮꾪듃濡?
+        # labels[-1]??LSB ????��?�싱?�로 ?�어??i번째 비트�?
         for i in range(width):  # i=0..7
             lab = labels[width - 1 - i]
             val |= (int(self.mem.get(lab)) & 1) << i
         return val & 0xFF
 
-    # ---------- ?대? ?ㅽ뻾湲?----------
+    # ---------- ?��? ?�행�?----------
         # ---------- interactive helpers ----------
     def _start_cmd_reader(self) -> None:
         if self._cmd_thread is not None and self._cmd_thread.is_alive():
@@ -2010,7 +2010,7 @@ class CPU:
             self._on_execute(f"COPYBITS {dst}, {src}")
             return ch
 
-        # --- ADD/ADDI (signed: Z/N/V 媛깆떊) ---
+        # --- ADD/ADDI (signed: Z/N/V 갱신) ---
         if op == "ADDI":
             dst, imm = args
             dst_name = str(dst)
@@ -2087,7 +2087,7 @@ class CPU:
             self._on_execute("ADD8 (via LUT) ; RES -> SRC1 + SRC2")
             return ch
 
-        # --- SUB/SUBI (signed: Z/N/V 媛깆떊) ---
+        # --- SUB/SUBI (signed: Z/N/V 갱신) ---
         if op == "SUBI":
             dst, imm = args
             dst_name = str(dst)
@@ -2172,7 +2172,7 @@ class CPU:
             self._on_execute(f"PACK {var} <- RES ({v})")
             return ch
 
-        # --- 鍮꾪듃 ?곗궛 (Z/N 媛깆떊, V=0) ---
+        # --- 비트 ?�산 (Z/N 갱신, V=0) ---
         if op in ("AND", "OR", "XOR"):
             dst, src = args
             dst_name, src_name = str(dst), str(src)
@@ -2198,7 +2198,7 @@ class CPU:
             ch[dst_name] = v
             return ch
 
-        # --- ?쒗봽??---
+        # --- ?�프??---
         if op == "SHL":
             dst, = args
             dst_name = str(dst)
@@ -2212,7 +2212,7 @@ class CPU:
             
             # Carry out from MSB before shift
             self.flags["C"] = 1 if (_to_u8(a) & 0x80) else 0
-            # SHL overflow: 理쒖긽??鍮꾪듃 蹂???щ?濡??먮떒
+            # SHL overflow: 최상??비트 변???��?�??�단
             ov = 1 if (_sign_bit(a) != _sign_bit(v)) else 0
             self.mem.set(dst_name, v)
             self.flags["V"] = ov
@@ -2235,13 +2235,13 @@ class CPU:
 
             # Carry out from LSB
             self.flags["C"] = 1 if (_to_u8(a) & 0x01) else 0
-            self.flags["V"] = 0 # ASR? ?ㅻ쾭?뚮줈???놁쓬
+            self.flags["V"] = 0 # ASR?� ?�버?�로???�음
             _set_zn_from_val(self.flags, v)
             self._on_execute(f"SHR  {dst} ; via LUT {a:4d}>>1 -> {v:4d} | V=0 Z={self.flags['Z']} N={self.flags['N']}")
             ch[dst_name] = v
             return ch
 
-        # --- 鍮꾧탳/遺꾧린 ---
+        # --- 비교/분기 ---
         if op == "CMP" or op == "CMPI":
             a_name, b_arg = args
             a = self.mem.get(str(a_name))
@@ -2371,7 +2371,7 @@ class CPU:
                 self._on_execute(f"BVC  {label} ; V=1  | no-branch")
             return ch
 
-        # ?섏쐞 ?명솚: BCS/BCC ??V ?ъ슜
+        # ?�위 ?�환: BCS/BCC ??V ?�용
         if op == "BCS":
             label = str(args[0])
             if self.flags.get("V", 0) == 1:
@@ -2402,7 +2402,7 @@ class CPU:
                 self._on_execute(f"BCC  {label} ; V=1  | no-branch")
             return ch
 
-        # ?뺤쓽 ????op
+        # ?�의 ????op
         self._on_execute(f"(unknown op) {op} {args}")
         return ch
 
@@ -2410,9 +2410,9 @@ class CPU:
         addr = self.prog.get_label_addr(name)
         return addr
 
-    # ---------- 肄섏넄 ??----------
+    # ---------- 콘솔 ??----------
     def _on_fetch(self, text: str) -> None:
-        # Stage: FETCH (鍮꾨룞湲??쒖떆)
+        # Stage: FETCH (비동�??�시)
         try:
             post_stage("FETCH")
         except Exception:
@@ -2449,15 +2449,15 @@ class CPU:
 
     def _on_decode(self, decoded: Tuple[str, tuple[Any, ...]]) -> None:
         op, args = decoded
-        # Stage: DECODE (鍮꾨룞湲??쒖떆)
+        # Stage: DECODE (비동�??�시)
         try:
             post_stage("DECODE")
         except Exception:
             pass
         self._println(f"[DECODE] {op} {args}")
-        # IR??FETCH ?④퀎?먯꽌 怨좎닔以 ?쇱씤 湲곗??쇰줈 ?대? ?쒖떆??
+        # IR??FETCH ?�계?�서 고수준 ?�인 기�??�로 ?��? ?�시??
     def _on_execute(self, desc: str) -> None:
-        # Stage: EXECUTE (鍮꾨룞湲??쒖떆)
+        # Stage: EXECUTE (비동�??�시)
         try:
             post_stage("EXECUTE")
         except Exception:
@@ -2472,14 +2472,14 @@ class CPU:
     def _on_writeback(self, changes: Dict[str, int]) -> None:
         if changes:
             ch = ", ".join(f"{k}={v:4d}" for k, v in changes.items())
-            # Stage: WRITEBACK (鍮꾨룞湲??쒖떆)
+            # Stage: WRITEBACK (비동�??�시)
             try:
                 post_stage("WRITEBACK")
             except Exception:
                 pass
             self._println(f"[WB]     {ch}")
         else:
-            # Stage: WRITEBACK (鍮꾨룞湲??쒖떆: 蹂寃??놁뼱???숈씪)
+            # Stage: WRITEBACK (비동�??�시: 변�??�어???�일)
             try:
                 post_stage("WRITEBACK")
             except Exception:
@@ -2734,5 +2734,6 @@ class CPU:
     def _println(self, s: str) -> None:
         if self.debug:
             print(s)
+
 
 

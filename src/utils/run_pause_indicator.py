@@ -1,4 +1,4 @@
-from openrgb.utils import RGBColor
+from rgb_types import RGBColor
 from rgb_controller import set_key_color
 from utils.keyboard_presets import (
     RUN_PAUSE_LABEL,
@@ -30,3 +30,4 @@ def set_run(is_running: bool) -> None:
         run_on()
     else:
         run_off()
+

@@ -1,18 +1,17 @@
 # sim/data_memory_rgb_visual.py
 from rgb_controller import set_key_color, get_key_color
-from openrgb.utils import RGBColor
+from rgb_types import RGBColor
 from utils.keyboard_presets import VARIABLE_KEYS
 import time
 
-# 거리 계산에서 G 채널은 낮은 가중치를 둬서 R/B 악센트 차이를 더 잘 반영
+# 거리 계산?�서 G 채널?� ??? 가중치�??�서 R/B ?�센??차이�?????반영
 WG = 0.3  # R,B=1.0, G=0.3
 
 def _wrap_s8(x: int) -> int:
     return ((int(x) + 128) & 0xFF) - 128
 
-# 값 -> 색상 매핑(가시성 강화)
-# - 작은 정수 변화도 식별되도록 mod16 악센트(두 채널)에 큰 스텝을 부여
-# - 0은 밝은 회색, 모든 채널 최소 50 이상으로 검정 근접 방지
+# �?-> ?�상 매핑(가?�성 강화)
+# - ?��? ?�수 변?�도 ?�별?�도�?mod16 ?�센????채널)?????�텝??부??# - 0?� 밝�? ?�색, 모든 채널 최소 50 ?�상?�로 검??근접 방�?
 VALS   = list(range(-128, 128))
 VAL_TO_RGB_LIST: list[tuple[int, int, int]] = []
 RGB_TO_VAL_EXACT: dict[tuple[int, int, int], int] = {}
@@ -24,16 +23,15 @@ for v in VALS:
     if v == 0:
         rgb = (190, 190, 190)
     elif v > 0:
-        # 양수: R=255 유지, G는 sqrt 스케일(초기 민감도↑), B는 mod16 악센트로 미세 변화 증폭
+        # ?�수: R=255 ?��?, G??sqrt ?��???초기 민감?�↑), B??mod16 ?�센?�로 미세 변??증폭
         mag = v / 127.0
         n = v & 0x0F  # 0..15
         g = _clamp(int((mag ** 0.5) * 180) + 60, 60, 255)
-        r = 255 - min(32, n * 2)                 # 255..223 (약한 변화)
-        b = _clamp(50 + n * 13, 50, 255)         # 50..255 (강한 변화)
+        r = 255 - min(32, n * 2)                 # 255..223 (?�한 변??
+        b = _clamp(50 + n * 13, 50, 255)         # 50..255 (강한 변??
         rgb = (r, g, b)
     else:
-        # 음수: B=255 유지, G는 sqrt 스케일, R는 mod16 악센트
-        av = abs(v)
+        # ?�수: B=255 ?��?, G??sqrt ?��??? R??mod16 ?�센??        av = abs(v)
         n = av & 0x0F  # 0..15
         mag = av / 128.0
         g = _clamp(int((mag ** 0.5) * 180) + 60, 60, 255)
@@ -45,7 +43,7 @@ for v in VALS:
     RGB_TO_VAL_EXACT[rgb] = v
 
 def _nearest_val_from_rgb(r: int, g: int, b: int) -> int:
-    """입력(r,g,b) 측정값을 가장 가까운 LUT 인덱스로 매핑."""
+    """?�력(r,g,b) 측정값을 가??가까운 LUT ?�덱?�로 매핑."""
     tup = (int(r), int(g), int(b))
     if tup in RGB_TO_VAL_EXACT:
         return RGB_TO_VAL_EXACT[tup]
@@ -56,7 +54,7 @@ def _nearest_val_from_rgb(r: int, g: int, b: int) -> int:
         dr = r - rr
         dg = g - gg
         db = b - bb
-        # G 채널의 가중치는 낮춰서 R/B 차이를 강조
+        # G 채널??가중치????��??R/B 차이�?강조
         d2 = (dr*dr) + (WG * dg*dg) + (db*db)
         if d2 < best_d2:
             best_d2 = d2
@@ -155,3 +153,4 @@ class DataMemoryRGBVisual:
 
     def get_flag(self, label: str) -> bool:
         return bool(self.get(label))
+

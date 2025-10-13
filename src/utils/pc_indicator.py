@@ -1,5 +1,5 @@
 from typing import Dict
-from openrgb.utils import RGBColor
+from rgb_types import RGBColor
 from rgb_controller import set_labels_atomic, set_key_color
 import utils.color_presets as cp
 from utils.keyboard_presets import PC as PC_LABELS
@@ -36,10 +36,9 @@ def update_pc(value: int) -> None:
 
     payload: Dict[str, RGBColor] = {lab: OFF for lab in PC_LABELS}
 
-    use_tens = last2 >= 10  # 05처럼 앞자리가 0이면 켜지지 않음
+    use_tens = last2 >= 10  # 05처럼 ?�자리�? 0?�면 켜�?지 ?�음
     if use_tens and tens == ones:
-        # 두 자리가 동일하면 해당 하나의 키만 아주 강한 노란색
-        payload[o_lab] = EQUAL_DIGIT_ON
+        # ???�리가 ?�일?�면 ?�당 ?�나???�만 ?�주 강한 ?��???        payload[o_lab] = EQUAL_DIGIT_ON
     else:
         if use_tens:
             payload[t_lab] = TENS_ON
@@ -65,3 +64,4 @@ def clear_pc() -> None:
                 set_key_color(lab, OFF)
             except Exception:
                 pass
+

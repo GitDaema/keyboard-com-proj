@@ -1,6 +1,6 @@
 from typing import Literal
 import threading
-from openrgb.utils import RGBColor
+from rgb_types import RGBColor
 from rgb_controller import set_labels_atomic, set_key_color
 import utils.color_presets as cp
 
@@ -20,7 +20,7 @@ STAGE_OFF: RGBColor = cp.BLACK
 
 StageName = Literal["FETCH", "DECODE", "EXECUTE", "WRITEBACK"]
 
-# 내부 상태: 각 단계가 '한번이라도 표시됨' 여부와 현재 점등 상태
+# ?��? ?�태: �??�계가 '?�번?�라???�시?? ?��??� ?�재 ?�등 ?�태
 _shown: dict[str, bool] = {s: False for s in STAGES}
 _on: dict[str, bool] = {s: False for s in STAGES}
 _lock = threading.Lock()
@@ -42,23 +42,23 @@ def clear_stages() -> None:
 
 def post_stage(stage: StageName) -> None:
     """
-    단순 규칙:
-    - 새 stage는 즉시 켠다(성공하면 해당 단계는 '표시됨'으로 기록).
-    - 현재 단계가 아닌 키는 '표시된 적이 있다면' 즉시 끈다.
-    - 동시에 여러 키가 켜져 있는 것은 허용됨.
+    ?�순 규칙:
+    - ??stage??즉시 켠다(?�공?�면 ?�당 ?�계??'?�시???�로 기록).
+    - ?�재 ?�계가 ?�닌 ?�는 '?�시???�이 ?�다�? 즉시 ?�다.
+    - ?�시???�러 ?��? 켜져 ?�는 것�? ?�용??
     """
     target = STAGE_KEYS.get(stage)
     if not target:
         return
 
     with _lock:
-        # 끌 목록: 이미 표시되었고 현재 단계가 아닌 것들
+        # ??목록: ?��? ?�시?�었�??�재 ?�계가 ?�닌 것들
         off_labels = []
         for s in STAGES:
             if s != stage and _on[s] and _shown[s]:
                 off_labels.append(STAGE_KEYS[s])
 
-        # 켤 대상 포함한 일괄 페이로드 구성
+        # �??�???�함???�괄 ?�이로드 구성
         payload = {target: STAGE_ON}
         for lab in off_labels:
             payload[lab] = STAGE_OFF
@@ -73,7 +73,7 @@ def post_stage(stage: StageName) -> None:
                     _on[s] = False
         return
 
-    # 배치 실패 시 개별 폴백
+    # 배치 ?�패 ??개별 ?�백
     try:
         set_key_color(target, STAGE_ON)
         turned_on = True
@@ -87,9 +87,10 @@ def post_stage(stage: StageName) -> None:
         for lab in off_labels:
             try:
                 set_key_color(lab, STAGE_OFF)
-                # 역매핑으로 _on 갱신
+                # ??��?�으�?_on 갱신
                 for s in STAGES:
                     if STAGE_KEYS[s] == lab:
                         _on[s] = False
             except Exception:
                 pass
+

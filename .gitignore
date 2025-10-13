@@ -80,3 +80,6 @@ package/
 *.out
 *.pid
 *.lock
+
+data/devices/*.json
+data/devices/*.json.example
