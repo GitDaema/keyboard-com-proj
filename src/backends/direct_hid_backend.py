@@ -197,12 +197,26 @@ class DirectHIDBackend:
             return False
         self._cache[i] = color.as_tuple()
         self._send_key_update(i, color)
+        self._send_commit()
         return True
 
     def set_many(self, indices: Iterable[int], colors: Iterable[RGBColor]) -> bool:
+        indices = list(indices)
+        colors = list(colors)
         for i, c in zip(indices, colors):
             self._cache[int(i)] = c.as_tuple()
-        self._send_frame_bulk()
+
+        # If bulk config exists, prefer a single bulk frame
+        cfg_bulk = self._cfg.get('bulk') if isinstance(self._cfg, dict) else None
+        if isinstance(cfg_bulk, dict):
+            self._send_frame_bulk()
+            return True
+
+        # Fallback: batch per-key updates with a single commit
+        for i, c in zip(indices, colors):
+            self._send_key_update(int(i), c)
+        
+        self._send_commit()
         return True
 
     def get_color(self, index: int, fresh: bool = True) -> Tuple[int, int, int]:
@@ -250,20 +264,53 @@ class DirectHIDBackend:
     def _send_commit(self) -> None:
         cfg = self._cfg.get('commit') if isinstance(self._cfg, dict) else None
         dbg = str(os.environ.get('HID_DEBUG', '')).strip().lower() in ('1', 'true')
-        if not isinstance(cfg, list):
+
+        # Legacy list-based format
+        if isinstance(cfg, list):
             if dbg:
-                print('[HID] no commit')
+                print('[HID] commit (legacy list format)')
+            for item in cfg:
+                try:
+                    hx = self._parse_hex(str(item))
+                    if dbg:
+                        print('[HID] commit ->', hx)
+                    self._hid_send(hx)
+                except Exception as ex:
+                    if dbg:
+                        print('[HID] commit error:', ex)
             return
-        for item in cfg:
-            try:
-                hx = self._parse_hex(str(item))
-                if dbg:
-                    print('[HID] commit ->', hx)
-                self._hid_send(hx)
-            except Exception as ex:
-                if dbg:
-                    print('[HID] commit error:', ex)
-                pass
+
+        # New dict-based format from autoconfig
+        if not isinstance(cfg, dict):
+            if dbg:
+                print('[HID] no commit config found')
+            return
+        
+        if dbg:
+            print('[HID] commit (dict format)')
+        try:
+            prologue = self._parse_hex(str(cfg.get('prologue', '')))
+            if not prologue:
+                return
+            
+            length = 64 # Assume 64-byte reports
+            buf = bytearray(length)
+            
+            report_id = int(self._cfg.get('report_id', 0))
+
+            offset = 0
+            if report_id != 0:
+                buf[0] = report_id & 0xFF
+                offset = 1
+
+            buf[offset:offset+len(prologue)] = prologue
+            
+            if dbg:
+                print('[HID] commit ->', bytes(buf))
+            self._hid_send(bytes(buf))
+        except Exception as ex:
+            if dbg:
+                print('[HID] commit error:', ex)
 
     def _apply_remap(self, idx: int) -> int:
         if self._remap and 0 <= idx < len(self._remap):
@@ -279,35 +326,36 @@ class DirectHIDBackend:
         if not isinstance(cfg, dict):
             return
         try:
-            rid = int(cfg.get('report_id', 0))
-            length = int(cfg.get('length', 0))
-            base_hex = self._parse_hex(str(cfg.get('base_hex', '')))
-            if length <= 0:
-                length = len(base_hex) if base_hex else 0
-            if length <= 0:
+            prologue = self._parse_hex(str(cfg.get('prologue', '')))
+            body_len = int(cfg.get('body_len', 4))
+            
+            if not prologue:
                 return
+
+            length = 64 # Assume 64-byte reports
             buf = bytearray(length)
-            if base_hex:
-                for i, b in enumerate(base_hex[:length]):
-                    buf[i] = b
-            if length >= 1:
-                buf[0] = rid & 0xFF
-            offs = cfg.get('offsets', {})
-            if isinstance(offs, dict):
-                idx_val = self._apply_remap(int(index))
-                scale = int(cfg.get('index_scale', 1))
-                bias = int(cfg.get('index_bias', 0))
-                idx_enc = (idx_val * scale) + bias
-                o_i = offs.get('index')
-                if isinstance(o_i, int) and 0 <= o_i < length:
-                    buf[o_i] = idx_enc & 0xFF
-                r, g, b = int(color.red), int(color.green), int(color.blue)
-                for key, val in (('r', r), ('g', g), ('b', b)):
-                    o = offs.get(key)
-                    if isinstance(o, int) and 0 <= o < length:
-                        buf[o] = val & 0xFF
+
+            report_id = int(self._cfg.get('report_id', 0))
+
+            offset = 0
+            if report_id != 0:
+                buf[0] = report_id & 0xFF
+                offset = 1
+
+            buf[offset:offset+len(prologue)] = prologue
+            offset += len(prologue)
+
+            idx_val = self._apply_remap(int(index))
+            r, g, b = int(color.red), int(color.green), int(color.blue)
+            
+            if offset + body_len <= length:
+                buf[offset] = idx_val & 0xFF
+                buf[offset+1] = r & 0xFF
+                buf[offset+2] = g & 0xFF
+                buf[offset+3] = b & 0xFF
+
             self._hid_send(bytes(buf))
-            self._send_commit()
+            # DO NOT COMMIT HERE. The caller is responsible.
         except Exception:
             pass
 
